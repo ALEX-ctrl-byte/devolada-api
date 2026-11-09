@@ -1,0 +1,83 @@
+# Especificación de DigitalOcean App Platform para De Volada.
+# Despliegue: doctl apps create --spec .do/app.yaml  (o cárgala en la web de DO).
+# La fuente (GitHub o carpeta subida) se vincula desde el panel de DigitalOcean.
+name: devolada
+region: nyc
+services:
+  - name: api
+    environment_slug: node-js
+    build_command: npm install --production
+    run_command: npm start
+    http_port: 3000
+    instance_count: 1
+    instance_size_slug: basic-xxs
+    envs:
+      - key: NODE_ENV
+        value: production
+      - key: DATABASE_URL
+        value: ${db.DATABASE_URL}
+      - key: DB_CA_CERT
+        value: ${db.CA_CERT}
+      - key: DB_SSL
+        value: "true"
+      - key: TRUST_PROXY
+        value: "true"
+      - key: OTP_PROVEEDOR
+        value: desactivado
+      - key: OTP_SECRET
+        type: SECRET
+        value: "CAMBIAR_POR_SECRETO_REAL"
+      - key: JWT_SECRET
+        type: SECRET
+        value: "CAMBIAR_POR_SECRETO_REAL"
+      - key: WHATSAPP_BUSINESS_NUMBER
+        value: "591XXXXXXXXX"
+      - key: ADMIN_WEB_ORIGIN
+        value: "https://panel.usadevolada.com"
+      - key: CORS_ORIGIN
+        value: "https://panel.usadevolada.com"
+      - key: FRONTEND_URL
+        value: "https://panel.usadevolada.com"
+      - key: PUBLIC_API_URL
+        value: "https://api.usadevolada.com"
+      # El nombre de esta variable se conserva (QR_RECARGA_DEUNA_URL) por compatibilidad con el código.
+      - key: QR_RECARGA_DEUNA_URL
+        value: "https://CAMBIAR/imagen-qr.png"
+      # Archivos en DigitalOcean Spaces (el disco de App Platform se borra en cada despliegue).
+      - key: ALMACENAMIENTO_DRIVER
+        value: s3
+      - key: SPACES_ENDPOINT
+        value: "https://nyc3.digitaloceanspaces.com"
+      - key: SPACES_REGION
+        value: "nyc3"
+      - key: SPACES_BUCKET
+        value: "CAMBIAR-nombre-del-bucket"
+      - key: SPACES_KEY
+        type: SECRET
+        value: "CAMBIAR"
+      - key: SPACES_SECRET
+        type: SECRET
+        value: "CAMBIAR"
+      - key: OSRM_BASE_URL
+        value: "https://router.project-osrm.org"
+      - key: PUNTOS_POR_VIAJE
+        value: "2"
+      - key: VERSION_TERMINOS
+        value: "1.0"
+      - key: STADIA_MAPS_API_KEY
+        type: SECRET
+        value: "CAMBIAR"
+    health_check:
+      http_path: /salud
+
+databases:
+  # MySQL en App Platform NO puede ser una base "de desarrollo" (solo PostgreSQL lo permite):
+  # requiere un clúster administrado ya creado (production: true + cluster_name).
+  # Crea antes el clúster, la base y el usuario (ver LEEME_DESPLIEGUE_DO.md).
+  - name: db
+    engine: MYSQL
+    version: "8"
+    production: true
+    cluster_name: db-mysql-nyc3-47114
+    db_name: devolada
+    db_user: devolada_api

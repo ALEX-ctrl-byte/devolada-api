@@ -1,0 +1,33 @@
+{
+  "name": "devolada-api",
+  "version": "0.7.2",
+  "description": "API REST de De Volada (Node.js + Express + MySQL + Socket.IO)",
+  "type": "module",
+  "main": "src/server.js",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "start": "node src/server.js",
+    "dev": "node --watch src/server.js",
+    "check": "node --check src/server.js && node --check src/app.js && node --check src/config.js && node --check src/db.js && node --check src/rutas/salud.js && node --check src/rutas/registro.js && node --check src/rutas/otp.js && node --check src/rutas/entrar.js && node --check src/rutas/registroPin.js && node --check src/servicios/pin.js && node --check src/rutas/sesion.js && node --check src/rutas/cuenta.js && node --check src/rutas/ciudades.js && node --check src/rutas/perfil.js && node --check src/rutas/conductor.js && node --check src/rutas/viajes.js && node --check src/rutas/admin.js && node --check src/rutas/comercio.js && node --check src/rutas/comerciosPublicos.js && node --check src/rutas/media.js && node --check src/rutas/billetera.js && node --check src/rutas/pedidos.js && node --check src/rutas/feedback.js && node --check src/rutas/envios.js && node --check src/tiempoReal.js && node --check src/servicios/rutasStadia.js && node --check src/servicios/geocodificacionStadia.js && node --check src/rutas/ubicaciones.js && node --check src/servicios/tarifas.js && node --check src/servicios/calculoTarifaPura.js && node --check src/servicios/enviarOtp.js && node --check src/servicios/qrRecarga.js && node --check src/tiempoReal.js",
+    "probar:tiempo-real": "node pruebas/tiempo-real.mjs",
+    "doctor": "node herramientas/diagnostico.js",
+    "importar:sql": "node herramientas/importar-sql.mjs",
+    "check:all": "node herramientas/revisar-sintaxis.js",
+    "test": "node --test pruebas/*.test.mjs"
+  },
+  "dependencies": {
+    "bcryptjs": "^2.4.3",
+    "dotenv": "^16.4.5",
+    "express": "^4.21.2",
+    "express-rate-limit": "^8.7.1",
+    "helmet": "^8.3.0",
+    "multer": "^2.4.0",
+    "mysql2": "^3.11.5",
+    "socket.io": "^4.8.1"
+  },
+  "devDependencies": {
+    "socket.io-client": "^4.8.1"
+  }
+}

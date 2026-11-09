@@ -1,0 +1,50 @@
+# ============================================================================
+# Variables para Railway  ->  servicio de la API > Variables > "Raw Editor"
+# Copia, pega y reemplaza lo marcado con  <<< CAMBIAR >>>
+# (Este archivo no contiene secretos reales; es seguro subirlo a GitHub.)
+# ============================================================================
+
+NODE_ENV=production
+TRUST_PROXY=true
+
+# --- Base de datos: referencia al servicio MySQL de Railway (se escribe tal cual, con llaves) ---
+# Si tu servicio MySQL NO se llama "MySQL", cambia el nombre dentro de ${{ }}.
+DATABASE_URL=${{MySQL.MYSQL_URL}}
+
+# --- Seguridad ---
+# Genera uno con:  openssl rand -hex 32   (o en PowerShell: -join ((1..64) | % { '{0:x}' -f (Get-Random -Max 16) }))
+# IMPORTANTE: no lo cambies después; también cifra los PIN de los envíos.
+OTP_SECRET=<<< CAMBIAR: 64 caracteres aleatorios >>>
+OTP_PROVEEDOR=desactivado
+
+# --- URLs ---
+# Si omites PUBLIC_API_URL se usa el dominio que Railway genera (RAILWAY_PUBLIC_DOMAIN).
+# Con dominio propio:  https://api.usadevolada.com
+# PUBLIC_API_URL=https://api.usadevolada.com
+ADMIN_WEB_ORIGIN=https://panel.usadevolada.com
+CORS_ORIGIN=https://panel.usadevolada.com
+FRONTEND_URL=https://panel.usadevolada.com
+
+# --- Negocio ---
+WHATSAPP_BUSINESS_NUMBER=<<< CAMBIAR: 591XXXXXXXX >>>
+QR_RECARGA_DEUNA_URL=<<< CAMBIAR: https://.../imagen-qr.png >>>
+PUNTOS_POR_VIAJE=2
+VERSION_TERMINOS=1.0
+
+# --- Mapas ---
+STADIA_MAPS_API_KEY=<<< CAMBIAR >>>
+STADIA_ROUTING_URL=https://api.stadiamaps.com/route/v1
+OSRM_BASE_URL=https://router.project-osrm.org
+
+# --- Archivos: elige UNA de las dos opciones ---
+# Opción 1 (recomendada si ya tienes archivos en Spaces: no se pierde nada): seguir usando DigitalOcean Spaces
+ALMACENAMIENTO_DRIVER=s3
+SPACES_ENDPOINT=https://nyc3.digitaloceanspaces.com
+SPACES_REGION=nyc3
+SPACES_BUCKET=<<< CAMBIAR >>>
+SPACES_KEY=<<< CAMBIAR >>>
+SPACES_SECRET=<<< CAMBIAR >>>
+
+# Opción 2: Volume de Railway (sin Spaces). Borra las 5 líneas de arriba, crea un Volume en el servicio
+# con Mount Path /data y deja:
+# ALMACENAMIENTO_DRIVER=disco

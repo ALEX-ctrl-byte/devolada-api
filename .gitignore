@@ -1,0 +1,16 @@
+node_modules/
+.env
+.env.*
+!.env.example
+*.crt
+*.pem
+uploads/
+almacen-privado/
+almacen-publico/
+*.log
+.DS_Store
+Thumbs.db
+*.zip
+# Dumps con datos reales: nunca al repositorio
+sql/*dump*.sql
+sql/railway_import.sql

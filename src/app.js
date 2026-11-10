@@ -71,7 +71,7 @@ app.use('/otp', limite(60_000, 20));          // 20 por minuto
 app.use('/registro', limite(3_600_000, 30));  // 30 por hora
 app.use('/registro-pin', limite(3_600_000, 30)); // 30 por hora
 app.use('/entrar', limite(60_000, 20));       // 20 por minuto (además: 5 PIN fallidos/hora por teléfono)
-app.use('/ubicaciones', limite(60_000, 30)); // autocompletado con pausa en Android: máximo 30/min por IP
+app.use('/ubicaciones', limite(60_000, 90)); // autocompletado con pausa en Android: máximo 90/min por IP (redes móviles comparten IP)
 
 app.use('/salud', conCaptura(rutaSalud));
 app.use('/ubicaciones', conCaptura(rutaUbicaciones));

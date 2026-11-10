@@ -48,7 +48,17 @@ export async function buscarDireccionesStadia(texto, cercaLat = null, cercaLng =
     url.searchParams.set('focus.point.lat', String(Number(cercaLat)));
     url.searchParams.set('focus.point.lon', String(Number(cercaLng)));
   }
-  const json = await consultar(url);
+  let json = await consultar(url);
+  // El autocompletado solo coincide por prefijo; si no halla nada, se prueba la búsqueda completa.
+  if (json.features.length === 0) {
+    const url2 = new URL('https://api.stadiamaps.com/geocoding/v2/search');
+    url2.searchParams.set('text', q);
+    url2.searchParams.set('lang', 'es');
+    url2.searchParams.set('boundary.country', 'BO');
+    url2.searchParams.set('size', '5');
+    for (const [k, v] of url.searchParams) if (k.startsWith('focus.')) url2.searchParams.set(k, v);
+    json = await consultar(url2);
+  }
   return json.features.flatMap((feature) => {
     const coords = feature?.geometry?.coordinates;
     const textoResultado = etiqueta(feature);

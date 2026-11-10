@@ -47,7 +47,9 @@ function configBaseDatos() {
 // Valor de 'trust proxy' de Express. Detrás de Cloudflare + balanceador de DigitalOcean usa TRUST_PROXY=true.
 function valorTrustProxy(v) {
   if (v == null || v === '') return 'loopback';
-  if (/^true$/i.test(v)) return true;
+  // 'true' haría que express-rate-limit lance ERR_ERL_PERMISSIVE_TRUST_PROXY (502 en todas las rutas
+  // limitadas) y permitiría falsificar la IP. Se limita a 1 salto de proxy (Railway).
+  if (/^true$/i.test(v)) return 1;
   if (/^false$/i.test(v)) return false;
   if (/^\d+$/.test(v)) return Number(v);
   return v;

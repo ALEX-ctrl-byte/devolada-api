@@ -23,6 +23,7 @@ import { rutaPedidos } from './rutas/pedidos.js';
 import { rutaFeedback } from './rutas/feedback.js';
 import { rutaEnvios } from './rutas/envios.js';
 import { rutaUbicaciones } from './rutas/ubicaciones.js';
+import { rutaNotificaciones } from './rutas/notificaciones.js';
 
 // Express 4 no captura errores de funciones async; este envoltorio los pasa al manejador global.
 function conCaptura(router) {
@@ -71,7 +72,7 @@ app.use('/otp', limite(60_000, 20));          // 20 por minuto
 app.use('/registro', limite(3_600_000, 30));  // 30 por hora
 app.use('/registro-pin', limite(3_600_000, 30)); // 30 por hora
 app.use('/entrar', limite(60_000, 20));       // 20 por minuto (además: 5 PIN fallidos/hora por teléfono)
-app.use('/ubicaciones', limite(60_000, 90)); // autocompletado con pausa en Android: máximo 90/min por IP (redes móviles comparten IP)
+app.use('/ubicaciones', limite(60_000, 30)); // autocompletado con pausa en Android: máximo 30/min por IP
 
 app.use('/salud', conCaptura(rutaSalud));
 app.use('/ubicaciones', conCaptura(rutaUbicaciones));
@@ -94,6 +95,7 @@ app.use('/billetera', conCaptura(rutaBilletera)); // saldo prepago exclusivo de 
 app.use('/pedidos', conCaptura(rutaPedidos)); // pedidos de comercio, asignación de delivery y cobros directos al receptor
 app.use(conCaptura(rutaFeedback)); // rutas con prefijos /calificaciones y /soporte ya declarados en el router
 app.use('/envios', conCaptura(rutaEnvios));
+app.use('/notificaciones', conCaptura(rutaNotificaciones));
 
 // Ruta inexistente
 app.use((_req, res) => error(res, 404, 'NO_ENCONTRADO', 'La ruta solicitada no existe.'));

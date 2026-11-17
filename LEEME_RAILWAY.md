@@ -59,3 +59,6 @@ el esquema completo **con todas las migraciones aplicadas**, triggers, el evento
 - Los datos importados incluyen cuentas de prueba (admin, pasajero, conductores) y sesiones activas del dump. Si lanzas
   desde cero, cambia el PIN del admin (`herramientas/pin-admin.mjs`) y revoca sesiones.
 - `docs/digitalocean/` conserva la guía y el `app.yaml` anteriores por si los necesitas.
+
+## Envíos con cobros separados y FCM
+La entrega incorpora la migración `sql/migracion_envios_cobro_paquete_fcm.sql`, rutas de confirmación separada de cobros y la integración FCM HTTP v1. Antes de desplegar consulta `../CONFIGURAR_FIREBASE_FCM_Y_ENVIOS.md`. No ejecutes la migración en producción sin backup. Configura `FCM_SERVICE_ACCOUNT_JSON` solo como variable secreta de Railway y confirma que los QR privados se guardan en Volume persistente o bucket S3 privado.

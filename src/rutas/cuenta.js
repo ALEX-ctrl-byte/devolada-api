@@ -88,6 +88,10 @@ rutaCuenta.delete('/', autenticar, async (req, res) => {
       [usuarioId],
     );
 
+    // Retira tokens push de todos los dispositivos de la cuenta antes de anonimizarla.
+    await opcional(conexion, 'DELETE FROM notificaciones_dispositivos WHERE usuario_id = ?', [usuarioId]);
+    await opcional(conexion, 'DELETE FROM envios_qr_temporales WHERE usuario_id = ?', [usuarioId]);
+
     // Datos personales del usuario: valores únicos y no identificables.
     await conexion.execute(
       `UPDATE usuarios

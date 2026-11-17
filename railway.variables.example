@@ -29,7 +29,7 @@ FRONTEND_URL=https://panel.usadevolada.com
 WHATSAPP_BUSINESS_NUMBER=<<< CAMBIAR: 591XXXXXXXX >>>
 QR_RECARGA_DEUNA_URL=<<< CAMBIAR: https://.../imagen-qr.png >>>
 PUNTOS_POR_VIAJE=2
-VERSION_TERMINOS=1.0
+VERSION_TERMINOS=2.3
 
 # --- Mapas ---
 STADIA_MAPS_API_KEY=<<< CAMBIAR >>>
@@ -48,3 +48,10 @@ SPACES_SECRET=<<< CAMBIAR >>>
 # Opción 2: Volume de Railway (sin Spaces). Borra las 5 líneas de arriba, crea un Volume en el servicio
 # con Mount Path /data y deja:
 # ALMACENAMIENTO_DRIVER=disco
+
+# --- Firebase Cloud Messaging (FCM) HTTP v1 ---
+# En Railway: pega el JSON completo de una cuenta de servicio de Firebase (Project Settings > Service accounts).
+# NUNCA coloques este JSON ni su private_key en Android, GitHub o en google-services.json.
+FCM_SERVICE_ACCOUNT_JSON=
+# Opcional; por defecto se usa project_id leído del JSON de cuenta de servicio.
+FCM_PROJECT_ID=

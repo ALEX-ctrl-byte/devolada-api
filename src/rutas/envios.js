@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import crypto from 'node:crypto';
+import multer from 'multer';
 import { db } from '../db.js';
 import { ok, error } from '../respuesta.js';
 import { autenticar } from '../middleware/autenticar.js';
@@ -9,6 +10,7 @@ import { obtenerRutaOSRM } from '../servicios/osrm.js';
 import { calcularTarifaDeUna, enteroBs, crearTokenCotizacionTarifa, leerTokenCotizacionTarifa } from '../servicios/tarifas.js';
 import { hashOtp, generarCodigoOtp, iguales } from '../seguridad.js';
 import { emitirActualizacionEnvio, avisarOfertaEnvio } from '../tiempoReal.js';
+import { detectarImagen, guardarDocumento, leerDocumento, borrarDocumento } from '../servicios/almacenamiento.js';
 
 export const rutaEnvios = Router();
 rutaEnvios.use(autenticar);
@@ -18,6 +20,7 @@ const dinero = (n) => Math.round((Number(n) + Number.EPSILON) * 100) / 100;
 const idempotencia = (v) => /^[A-Za-z0-9._:-]{8,64}$/.test(String(v ?? '').trim());
 const coord = (lat, lng) => Number.isFinite(Number(lat)) && Number.isFinite(Number(lng)) && Number(lat) >= -90 && Number(lat) <= 90 && Number(lng) >= -180 && Number(lng) <= 180;
 const mismoPunto = (aLat, aLng, bLat, bLng) => Math.abs(Number(aLat) - Number(bLat)) < 0.00001 && Math.abs(Number(aLng) - Number(bLng)) < 0.00001;
+const puedeEnviarPaquetes = (rol) => ['pasajero', 'comercio'].includes(String(rol ?? '').toLowerCase());
 
 // Los PIN se cifran con AES-GCM usando una clave derivada de OTP_SECRET; la BD no guarda el PIN en claro.
 function clavePin() { return crypto.createHash('sha256').update(`deuna-envios-pin|${process.env.OTP_SECRET ?? 'clave-solo-para-desarrollo'}`).digest(); }
@@ -55,6 +58,23 @@ async function tx(fn) {
   } catch (e) { await cx.rollback().catch(() => {}); throw e; }
   finally { cx.release(); }
 }
+async function emitirCodigoEntregaSiPagosListos(cx, envio) {
+  const paquetePagado = Number(envio.cobra_paquete) !== 1 || envio.estado_cobro_paquete === 'confirmado';
+  const deliveryPagado = envio.estado_cobro_delivery === 'confirmado';
+  const codigoVigente = envio.codigo_entrega_hash && envio.codigo_entrega_expira_en
+    && new Date(envio.codigo_entrega_expira_en).getTime() > Date.now();
+  if (envio.estado !== 'en_punto_entrega' || !paquetePagado || !deliveryPagado || codigoVigente) return false;
+  const codigo = generarCodigoOtp();
+  await cx.execute(
+    `UPDATE envios SET codigo_entrega_hash=?, codigo_entrega_cifrado=?,
+       codigo_entrega_expira_en=DATE_ADD(UTC_TIMESTAMP(), INTERVAL 15 MINUTE), intentos_codigo_entrega=0
+     WHERE id=? AND estado='en_punto_entrega'
+       AND (codigo_entrega_hash IS NULL OR codigo_entrega_expira_en <= UTC_TIMESTAMP())`,
+    [hashPin(envio.entrega_telefono, `envio-entrega:${envio.id}`, codigo), cifrarPin(codigo), envio.id],
+  );
+  return true;
+}
+
 async function gpsReciente(cx, conductorId) {
   const [rows] = await cx.execute(
     `SELECT latitud,longitud,es_mock,actualizado_en FROM conductor_ubicacion
@@ -87,15 +107,22 @@ function mostrarEnvio(e, usuarioId, incluirPinEntrega = false) {
     distancia_m: e.distancia_m == null ? null : Number(e.distancia_m), duracion_estimada_s: e.duracion_estimada_s == null ? null : Number(e.duracion_estimada_s),
     distancia_aproximacion_m: e.distancia_aproximacion_m == null ? null : Number(e.distancia_aproximacion_m), duracion_aproximacion_s: e.duracion_aproximacion_s == null ? null : Number(e.duracion_aproximacion_s),
     detalle_tarifa: typeof e.detalle_tarifa_json === 'string' ? (() => { try { return JSON.parse(e.detalle_tarifa_json); } catch { return null; } })() : (e.detalle_tarifa_json ?? null), tarifa_estimada: enteroBs(e.tarifa_estimada),
-    comision_monto: enteroBs(e.comision_monto), metodo_pago: e.metodo_pago, creado_en: e.creado_en,
-    asignado_en: e.asignado_en, recogido_en: e.recogido_en, llegada_en: e.llegada_en, entregado_en: e.entregado_en,
+    comision_monto: enteroBs(e.comision_monto), metodo_pago: e.metodo_pago, metodo_pago_delivery: e.metodo_pago,
+    cobra_paquete: Number(e.cobra_paquete) === 1, importe_paquete: dinero(e.importe_paquete ?? 0),
+    estado_cobro_paquete: e.estado_cobro_paquete ?? 'no_aplica', estado_cobro_delivery: e.estado_cobro_delivery ?? 'no_aplica',
+    paquete_cobrado_en: e.paquete_cobrado_en ?? null, delivery_cobrado_en: e.delivery_cobrado_en ?? null,
+    creado_en: e.creado_en, asignado_en: e.asignado_en, recogido_en: e.recogido_en, llegada_en: e.llegada_en, entregado_en: e.entregado_en,
     remitente_nombre: e.remitente_nombre, destinatario_nombre: e.destinatario_nombre,
     conductor_nombre: e.conductor_usuario_id ? [e.conductor_nombre, e.conductor_apellido].filter(Boolean).join(' ') : null,
     vehiculo_placa: e.vehiculo_placa ?? null, vehiculo_marca: e.vehiculo_marca ?? null,
     vehiculo_modelo: e.vehiculo_modelo ?? null, vehiculo_color: e.vehiculo_color ?? null,
-    qr_conductor_url: esRemitente && e.estado !== 'entregado' && e.metodo_pago === 'qr' ? e.qr_conductor_snapshot : null,
+    qr_conductor_url: esDestinatario && e.estado === 'en_punto_entrega' && e.metodo_pago === 'qr' && e.estado_cobro_delivery !== 'confirmado' ? e.qr_conductor_snapshot : null,
+    qr_remitente_url: esDestinatario && e.estado === 'en_punto_entrega' && Number(e.cobra_paquete) === 1 && e.estado_cobro_paquete !== 'confirmado' && e.qr_remitente_archivo ? `/envios/${Number(e.id)}/qr-paquete` : null,
     codigo_recogida: esRemitente && ['solicitado','asignado'].includes(e.estado) ? descifrarPin(e.codigo_recogida_cifrado) : null,
     codigo_entrega: esDestinatario && incluirPinEntrega && e.estado === 'en_punto_entrega' && e.codigo_entrega_expira_en && new Date(e.codigo_entrega_expira_en).getTime() > Date.now() ? descifrarPin(e.codigo_entrega_cifrado) : null,
+    puede_confirmar_cobro_paquete: esRemitente && e.estado === 'en_punto_entrega' && Number(e.cobra_paquete) === 1 && e.estado_cobro_paquete === 'pendiente',
+    puede_confirmar_cobro_delivery: esConductor && e.estado === 'en_punto_entrega' && e.estado_cobro_delivery === 'pendiente',
+    puede_entregar: esConductor && e.estado === 'en_punto_entrega' && (Number(e.cobra_paquete) !== 1 || e.estado_cobro_paquete === 'confirmado') && e.estado_cobro_delivery === 'confirmado' && Boolean(e.codigo_entrega_hash),
     puede_cancelar: esRemitente && e.estado === 'solicitado',
   };
   if (!esRemitente && !esDestinatario && !esConductor) return null;
@@ -107,7 +134,7 @@ function mostrarEnvio(e, usuarioId, incluirPinEntrega = false) {
 
 // POST /envios/cotizar — calcula y firma el precio de un envío personal antes de confirmar.
 rutaEnvios.post('/cotizar', async (req, res) => {
-  if (req.usuario.rol !== 'pasajero') return error(res, 403, 'ROL_NO_ADMITIDO', 'Solo las cuentas pasajeras pueden cotizar un envío.');
+  if (!puedeEnviarPaquetes(req.usuario.rol)) return error(res, 403, 'ROL_NO_ADMITIDO', 'Solo las cuentas de pasajero o comercio pueden cotizar un envío.');
   const b = req.body ?? {};
   const tipoVehiculo = String(b.tipo_vehiculo ?? 'moto').trim().toLowerCase();
   const oLat = Number(b.recogida_lat), oLng = Number(b.recogida_lng), dLat = Number(b.entrega_lat), dLng = Number(b.entrega_lng);
@@ -146,8 +173,32 @@ rutaEnvios.post('/cotizar', async (req, res) => {
   });
 });
 
+// El QR del remitente se sube antes de crear el envío y queda asociado a un token temporal de un solo uso.
+const subidaQrPaquete = multer({ storage: multer.memoryStorage(), limits: { fileSize: 5 * 1024 * 1024, files: 1, fields: 0 } }).single('archivo');
+rutaEnvios.post('/qr-remitente', (req, res, next) => {
+  if (!puedeEnviarPaquetes(req.usuario.rol)) return error(res, 403, 'ROL_NO_ADMITIDO', 'Solo una cuenta de pasajero o comercio puede subir el QR de cobro del paquete.');
+  subidaQrPaquete(req, res, (err) => {
+    if (!err) return next();
+    if (err.code === 'LIMIT_FILE_SIZE') return error(res, 413, 'ARCHIVO_MUY_GRANDE', 'El QR no puede superar 5 MB.');
+    return error(res, 400, 'SUBIDA_INVALIDA', 'No pudimos leer la imagen del QR.');
+  });
+}, async (req, res) => {
+  const imagen = req.file ? detectarImagen(req.file.buffer) : null;
+  if (!req.file || !imagen) return error(res, 415, 'IMAGEN_INVALIDA', 'Adjunta una imagen JPG, PNG o WebP válida de tu QR bancario.');
+  const archivo = await guardarDocumento(req.file.buffer, imagen.ext);
+  const token = crypto.randomBytes(32).toString('base64url');
+  const hash = crypto.createHash('sha256').update(token).digest('hex');
+  try {
+    await db.execute('INSERT INTO envios_qr_temporales (usuario_id,token_hash,archivo_nombre,expira_en) VALUES (?,?,?,DATE_ADD(UTC_TIMESTAMP(),INTERVAL 2 HOUR))', [req.usuario.id, hash, archivo]);
+  } catch (e) {
+    await borrarDocumento(archivo);
+    throw e;
+  }
+  return ok(res, { qr_token: token, mensaje: 'QR recibido. Se asociará al envío cuando confirmes la solicitud.' }, 201);
+});
+
 rutaEnvios.post('/', async (req, res) => {
-  if (req.usuario.rol !== 'pasajero') return error(res, 403, 'ROL_NO_ADMITIDO', 'Solo las cuentas pasajeras pueden solicitar un envío.');
+  if (!puedeEnviarPaquetes(req.usuario.rol)) return error(res, 403, 'ROL_NO_ADMITIDO', 'Solo las cuentas de pasajero o comercio pueden solicitar un envío.');
   const b = req.body ?? {};
   const descripcion = String(b.descripcion_paquete ?? '').trim().slice(0, 255);
   const nombreRecojo = String(b.recogida_nombre ?? `${req.usuario.nombre ?? ''} ${req.usuario.apellido ?? ''}`.trim()).trim().slice(0, 120);
@@ -157,14 +208,19 @@ rutaEnvios.post('/', async (req, res) => {
   const telEntrega = String(b.entrega_telefono ?? '').trim();
   const dirEntrega = String(b.entrega_direccion ?? '').trim().slice(0, 255);
   const tipoVehiculo = String(b.tipo_vehiculo ?? 'moto');
-  const metodoPago = String(b.metodo_pago ?? 'efectivo');
+  const metodoPago = String(b.metodo_pago ?? 'efectivo'); // forma de pago de la tarifa del delivery
+  const cobraPaquete = b.cobra_paquete === true || b.cobra_paquete === 1 || b.cobra_paquete === '1';
+  const importePaquete = dinero(b.importe_paquete ?? 0);
+  const qrTokenRemitente = String(b.qr_remitente_token ?? '').trim();
   const key = String(b.idempotency_key ?? '').trim();
   const oLat = Number(b.recogida_lat), oLng = Number(b.recogida_lng), dLat = Number(b.entrega_lat), dLng = Number(b.entrega_lng);
   if (descripcion.length < 3 || nombreRecojo.length < 2 || !/^\+591\d{8}$/.test(telRecojo) || dirRecojo.length < 5
       || !coord(oLat,oLng) || nombreEntrega.length < 2 || !/^\+591\d{8}$/.test(telEntrega) || dirEntrega.length < 5
       || !coord(dLat,dLng) || mismoPunto(oLat,oLng,dLat,dLng) || !['moto','auto'].includes(tipoVehiculo)
-      || !['efectivo','qr'].includes(metodoPago) || !idempotencia(key)) {
-    return error(res, 422, 'DATOS_INVALIDOS', 'Completa descripción, contactos bolivianos, ambas direcciones seleccionadas en el mapa, vehículo y clave de solicitud.');
+      || !['efectivo','qr'].includes(metodoPago) || !idempotencia(key)
+      || (cobraPaquete && (!(importePaquete > 0) || importePaquete > 1000000 || qrTokenRemitente.length < 30))
+      || (!cobraPaquete && (importePaquete !== 0 || qrTokenRemitente !== ''))) {
+    return error(res, 422, 'DATOS_INVALIDOS', 'Completa paquete, contactos, ambas direcciones, vehículo, forma de pago del delivery y, si cobras el paquete, el importe y QR de la remitente.');
   }
   const [destinatarios] = await db.execute(
     `SELECT id, nombre, telefono FROM usuarios WHERE telefono=? AND telefono_verificado=1 AND estado='activo' LIMIT 1`, [telEntrega],
@@ -209,17 +265,32 @@ rutaEnvios.post('/', async (req, res) => {
   const result = await tx(async (cx) => {
     const [ex] = await cx.execute('SELECT id, estado, codigo_recogida_cifrado FROM envios WHERE remitente_id=? AND idempotency_key=? LIMIT 1 FOR UPDATE', [req.usuario.id, key]);
     if (ex[0]) return { repetido: ex[0] };
+    let qrArchivo = null;
+    if (cobraPaquete) {
+      const qrHash = crypto.createHash('sha256').update(qrTokenRemitente).digest('hex');
+      const [qrs] = await cx.execute(
+        `SELECT id,archivo_nombre FROM envios_qr_temporales
+          WHERE usuario_id=? AND token_hash=? AND consumido_en IS NULL AND expira_en>UTC_TIMESTAMP() LIMIT 1 FOR UPDATE`,
+        [req.usuario.id, qrHash],
+      );
+      if (!qrs[0]) return { e: [409, 'QR_REMITENTE_CADUCADO', 'El QR de cobro venció o ya fue utilizado. Sube nuevamente la imagen.'] };
+      qrArchivo = qrs[0].archivo_nombre;
+      await cx.execute('UPDATE envios_qr_temporales SET consumido_en=UTC_TIMESTAMP() WHERE id=?', [qrs[0].id]);
+    }
     const [ins] = await cx.execute(
       `INSERT INTO envios (remitente_id,destinatario_id,tipo_vehiculo,descripcion_paquete,recogida_nombre,recogida_telefono,recogida_direccion,recogida_lat,recogida_lng,
         entrega_nombre,entrega_telefono,entrega_direccion,entrega_lat,entrega_lng,distancia_m,duracion_estimada_s,distancia_aproximacion_m,duracion_aproximacion_s,detalle_tarifa_json,
-        tarifa_estimada,comision_porcentaje,comision_monto,metodo_pago,codigo_recogida_hash,codigo_recogida_cifrado,idempotency_key)
-       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+        tarifa_estimada,comision_porcentaje,comision_monto,metodo_pago,cobra_paquete,importe_paquete,qr_remitente_archivo,estado_cobro_paquete,estado_cobro_delivery,
+        codigo_recogida_hash,codigo_recogida_cifrado,idempotency_key)
+       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
       [req.usuario.id,destino.id,tipoVehiculo,descripcion,nombreRecojo,telRecojo,dirRecojo,oLat,oLng,nombreEntrega,telEntrega,dirEntrega,dLat,dLng,
        ruta.distancia_m,ruta.duracion_estimada_s,calculoTarifa.detalle.distancia_aproximacion_m,calculoTarifa.detalle.duracion_aproximacion_s,JSON.stringify(calculoTarifa.detalle),
-       tarifa,porcentaje,comision,metodoPago,hashPin(telRecojo,'envio-recogida',pickupPin),cifrarPin(pickupPin),key],
+       tarifa,porcentaje,comision,metodoPago,cobraPaquete ? 1 : 0,cobraPaquete ? importePaquete : 0,qrArchivo,cobraPaquete ? 'pendiente' : 'no_aplica','pendiente',
+       hashPin(telRecojo,'envio-recogida',pickupPin),cifrarPin(pickupPin),key],
     );
     return { id: Number(ins.insertId), pickupPin };
   });
+  if (result.e) return error(res, ...result.e);
   if (result.repetido) {
     const e = await datosEnvio(result.repetido.id);
     return ok(res, { envio: mostrarEnvio(e, req.usuario.id), mensaje: 'Esta solicitud ya había sido registrada.' });
@@ -242,6 +313,23 @@ rutaEnvios.get('/mios', async (req, res) => {
 });
 
 rutaEnvios.get('/recibidos', async (req, res) => {
+  // Si el PIN de entrega venció mientras el destinatario completaba el proceso, se renueva
+  // únicamente cuando ambos cobros aplicables están confirmados y el conductor sigue en destino.
+  const [elegibles] = await db.execute(
+    `SELECT id FROM envios
+      WHERE destinatario_id=? AND estado='en_punto_entrega'
+        AND (cobra_paquete=0 OR estado_cobro_paquete='confirmado')
+        AND estado_cobro_delivery='confirmado'
+        AND (codigo_entrega_hash IS NULL OR codigo_entrega_expira_en IS NULL OR codigo_entrega_expira_en<=UTC_TIMESTAMP())`,
+    [req.usuario.id],
+  );
+  for (const fila of elegibles) {
+    await tx(async (cx) => {
+      const [rs] = await cx.execute('SELECT * FROM envios WHERE id=? FOR UPDATE', [fila.id]);
+      if (rs[0]) await emitirCodigoEntregaSiPagosListos(cx, rs[0]);
+      return {};
+    });
+  }
   const [rows] = await db.execute(
     `SELECT e.*, c.usuario_id AS conductor_usuario_id, uc.nombre AS conductor_nombre, uc.apellido AS conductor_apellido,
             m.placa AS vehiculo_placa,m.marca AS vehiculo_marca,m.modelo AS vehiculo_modelo,m.color AS vehiculo_color,
@@ -364,19 +452,68 @@ rutaEnvios.post('/:id/llegada', async (req,res) => {
   const result=await tx(async(cx)=>{
     const [rs]=await cx.execute('SELECT e.*,c.usuario_id AS conductor_usuario_id FROM envios e LEFT JOIN conductores c ON c.id=e.conductor_id WHERE e.id=? FOR UPDATE',[id]);const e=rs[0];
     if(!e || String(e.conductor_usuario_id)!==String(req.usuario.id)) return {e:[404,'ENVIO_NO_ENCONTRADO','No se encontró un envío asignado a tu cuenta.']};
-    if(e.estado!=='en_camino') return {e:[409,'ESTADO_INVALIDO','Primero confirma la recogida y sal hacia el destino.']};
+    if(e.estado!=='en_camino' && e.estado!=='en_punto_entrega') return {e:[409,'ESTADO_INVALIDO','Primero confirma la recogida y dirígete al destinatario.']};
     const [cs]=await cx.execute('SELECT id FROM conductores WHERE usuario_id=? LIMIT 1',[req.usuario.id]);
     const gps=await gpsReciente(cx,cs[0]?.id); if(!gps) return {e:[409,'GPS_NO_VALIDO','No hay ubicación GPS reciente y auténtica del conductor.']};
     const distancia=distanciaMetros(gps.lat,gps.lng,Number(e.entrega_lat),Number(e.entrega_lng));
     if(distancia>200) return {e:[409,'LEJOS_DEL_DESTINO','Debes estar a 200 metros o menos del punto de entrega.',{distancia_m:Math.round(distancia)}]};
-    const code=generarCodigoOtp();
-    await cx.execute("UPDATE envios SET estado='en_punto_entrega',llegada_en=UTC_TIMESTAMP(),codigo_entrega_hash=?,codigo_entrega_cifrado=?,codigo_entrega_expira_en=DATE_ADD(UTC_TIMESTAMP(),INTERVAL 15 MINUTE),intentos_codigo_entrega=0 WHERE id=?",
-      [hashPin(e.entrega_telefono,`envio-entrega:${id}`,code),cifrarPin(code),id]);
-    return {id};
+    if(e.estado==='en_camino') await cx.execute("UPDATE envios SET estado='en_punto_entrega',llegada_en=UTC_TIMESTAMP() WHERE id=?",[id]);
+    await emitirCodigoEntregaSiPagosListos(cx,{...e,estado:'en_punto_entrega'});
+    return {id,estado:'en_punto_entrega'};
   });
   if(result.e) return error(res,...result.e);
-  await emitirActualizacionEnvio(id,{notificacion:'El repartidor llegó. Abre De Volada para ver tu código de entrega.'});
-  return ok(res,{id,estado:'en_punto_entrega',mensaje:'Llegada validada. El código de entrega ya está disponible únicamente en la cuenta De Volada del destinatario.'});
+  await emitirActualizacionEnvio(id,{notificacion:'El repartidor llegó al destino. Completa los pagos y luego se habilitará el código de entrega.'});
+  return ok(res,{...result,mensaje:'Llegada validada. Primero se confirman los cobros y después se habilitará el código de entrega.'});
+});
+
+// QR privado del paquete: solo remitente o destinatario en el punto de entrega.
+rutaEnvios.get('/:id/qr-paquete', async (req,res) => {
+  const id=ID(req.params.id); if(!id) return error(res,404,'ENVIO_NO_ENCONTRADO','No se encontró el envío.');
+  const e=await datosEnvio(id);
+  if(!e) return error(res,404,'ENVIO_NO_ENCONTRADO','No se encontró el envío.');
+  const remitente=String(e.remitente_id)===String(req.usuario.id);
+  const destinatario=String(e.destinatario_id)===String(req.usuario.id);
+  if(!remitente && !(destinatario && e.estado==='en_punto_entrega')) return error(res,403,'QR_NO_AUTORIZADO','Este QR solo está disponible para las personas participantes del cobro.');
+  if(Number(e.cobra_paquete)!==1 || !e.qr_remitente_archivo) return error(res,404,'QR_NO_DISPONIBLE','Este envío no tiene un QR de cobro del paquete.');
+  const {buffer,mime}=await leerDocumento(e.qr_remitente_archivo);
+  res.setHeader('Content-Type',mime);res.setHeader('Cache-Control','private, no-store');res.setHeader('X-Content-Type-Options','nosniff');
+  return res.status(200).send(buffer);
+});
+
+// El remitente confirma únicamente después de verificar el abono del valor del paquete en su banco.
+rutaEnvios.post('/:id/confirmar-cobro-paquete', async (req,res) => {
+  if(!puedeEnviarPaquetes(req.usuario.rol)) return error(res,403,'ROL_NO_ADMITIDO','Solo la cuenta remitente de pasajero o comercio puede confirmar el cobro del paquete.');
+  const id=ID(req.params.id);if(!id)return error(res,404,'ENVIO_NO_ENCONTRADO','No se encontró el envío.');
+  const result=await tx(async(cx)=>{
+    const [rs]=await cx.execute('SELECT * FROM envios WHERE id=? FOR UPDATE',[id]);const e=rs[0];
+    if(!e || String(e.remitente_id)!==String(req.usuario.id)) return {e:[404,'ENVIO_NO_ENCONTRADO','No se encontró un envío de tu cuenta.']};
+    if(Number(e.cobra_paquete)!==1) return {e:[409,'NO_HAY_COBRO_PAQUETE','Este envío no cobra un valor adicional por el paquete.']};
+    if(e.estado!=='en_punto_entrega') return {e:[409,'AUN_NO_ENTREGANDO','La confirmación se habilita cuando el repartidor llega al destinatario.']};
+    if(e.estado_cobro_paquete!=='confirmado') await cx.execute("UPDATE envios SET estado_cobro_paquete='confirmado',paquete_cobrado_en=UTC_TIMESTAMP() WHERE id=?",[id]);
+    await emitirCodigoEntregaSiPagosListos(cx,{...e,estado_cobro_paquete:'confirmado'});
+    return {id,estado_cobro_paquete:'confirmado',estado_cobro_delivery:e.estado_cobro_delivery};
+  });
+  if(result.e)return error(res,...result.e);
+  await emitirActualizacionEnvio(id,{notificacion:'La persona remitente confirmó el cobro del paquete.'});
+  return ok(res,{...result,mensaje:'Cobro del paquete registrado. El código se habilita cuando también esté confirmado el delivery.'});
+});
+
+// El repartidor confirma que recibió el pago del transporte, sea efectivo o QR.
+rutaEnvios.post('/:id/confirmar-cobro-delivery', async (req,res) => {
+  if(req.usuario.rol!=='conductor') return error(res,403,'ROL_NO_ADMITIDO','Solo el repartidor asignado puede confirmar el cobro del delivery.');
+  const id=ID(req.params.id);if(!id)return error(res,404,'ENVIO_NO_ENCONTRADO','No se encontró el envío.');
+  const result=await tx(async(cx)=>{
+    const [rs]=await cx.execute('SELECT e.*,c.usuario_id AS conductor_usuario_id FROM envios e LEFT JOIN conductores c ON c.id=e.conductor_id WHERE e.id=? FOR UPDATE',[id]);const e=rs[0];
+    if(!e || String(e.conductor_usuario_id)!==String(req.usuario.id)) return {e:[404,'ENVIO_NO_ENCONTRADO','No se encontró un envío asignado a tu cuenta.']};
+    if(e.estado!=='en_punto_entrega') return {e:[409,'ESTADO_INVALIDO','El cobro del delivery se confirma al llegar al destinatario.']};
+    if(e.metodo_pago==='qr' && !e.qr_conductor_snapshot) return {e:[409,'QR_NO_DISPONIBLE','No hay un QR vigente asociado a este servicio.']};
+    if(e.estado_cobro_delivery!=='confirmado') await cx.execute("UPDATE envios SET estado_cobro_delivery='confirmado',delivery_cobrado_en=UTC_TIMESTAMP(),delivery_cobrado_por=? WHERE id=?",[req.usuario.id,id]);
+    await emitirCodigoEntregaSiPagosListos(cx,{...e,estado_cobro_delivery:'confirmado'});
+    return {id,estado_cobro_delivery:'confirmado',estado_cobro_paquete:e.estado_cobro_paquete};
+  });
+  if(result.e)return error(res,...result.e);
+  await emitirActualizacionEnvio(id,{notificacion:'El repartidor confirmó el cobro de la tarifa del delivery.'});
+  return ok(res,{...result,mensaje:'Cobro del delivery registrado. El código de entrega se habilita cuando también esté confirmado el paquete, si corresponde.'});
 });
 
 rutaEnvios.post('/:id/entregar', async (req,res) => {
@@ -388,6 +525,9 @@ rutaEnvios.post('/:id/entregar', async (req,res) => {
     const [rs]=await cx.execute('SELECT e.*,c.usuario_id AS conductor_usuario_id FROM envios e LEFT JOIN conductores c ON c.id=e.conductor_id WHERE e.id=? FOR UPDATE',[id]);const e=rs[0];
     if(!e || String(e.conductor_usuario_id)!==String(req.usuario.id)) return {e:[404,'ENVIO_NO_ENCONTRADO','No se encontró un envío asignado a tu cuenta.']};
     if(e.estado!=='en_punto_entrega') return {e:[409,'ESTADO_INVALIDO','El destinatario debe estar presente y el conductor debe marcar llegada.']};
+    if((Number(e.cobra_paquete)===1 && e.estado_cobro_paquete!=='confirmado') || e.estado_cobro_delivery!=='confirmado') {
+      return {e:[409,'COBROS_PENDIENTES','No se puede entregar ni cerrar el envío hasta confirmar el valor del paquete (si corresponde) y la tarifa del delivery.',{estado_cobro_paquete:e.estado_cobro_paquete,estado_cobro_delivery:e.estado_cobro_delivery}]};
+    }
     if(!e.codigo_entrega_expira_en || new Date(e.codigo_entrega_expira_en).getTime()<=Date.now()) return {e:[410,'CODIGO_VENCIDO','El código de entrega venció. Usa soporte para verificar la entrega de forma segura.']};
     if(Number(e.intentos_codigo_entrega)>=5) return {e:[423,'CODIGO_BLOQUEADO','Se agotaron los intentos. El envío quedó bloqueado para revisión.']};
     if(!compararPin(e.entrega_telefono,`envio-entrega:${id}`,pin,e.codigo_entrega_hash)) {
@@ -419,7 +559,7 @@ rutaEnvios.post('/:id/entregar', async (req,res) => {
 });
 
 rutaEnvios.post('/:id/cancelar', async (req,res) => {
-  if(req.usuario.rol!=='pasajero') return error(res,403,'ROL_NO_ADMITIDO','Solo el remitente puede cancelar la solicitud sin conductor.');
+  if(!puedeEnviarPaquetes(req.usuario.rol)) return error(res,403,'ROL_NO_ADMITIDO','Solo la cuenta remitente de pasajero o comercio puede cancelar la solicitud sin conductor.');
   const id=ID(req.params.id);if(!id)return error(res,404,'ENVIO_NO_ENCONTRADO','No se encontró el envío.');
   const result=await tx(async(cx)=>{
     const [rs]=await cx.execute('SELECT id,estado,remitente_id FROM envios WHERE id=? FOR UPDATE',[id]);const e=rs[0];

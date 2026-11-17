@@ -14,6 +14,7 @@
 import { Server } from 'socket.io';
 import { config } from './config.js';
 import { db } from './db.js';
+import { enviarPushNoBloqueante } from './servicios/fcm.js';
 import { hashToken } from './seguridad.js';
 import { ajusteNumero } from './servicios/ajustes.js';
 
@@ -140,6 +141,8 @@ export async function notificarEstadoViaje(viajeId, extra = {}) {
       if (u != null) io.in(`usuario:${u}`).socketsJoin(sala);
     }
     io.to(sala).emit('viaje:estado', { viaje_id: Number(v.id), estado: v.estado, ...extra });
+    const usuariosPush = [v.pasajero_id, v.conductor_usuario_id].filter((x) => x != null).map(Number);
+    enviarPushNoBloqueante(usuariosPush, { titulo: 'Actualización de viaje', cuerpo: `Tu viaje cambió a: ${String(v.estado).replaceAll('_', ' ')}.`, data: { tipo: 'viaje_estado', viaje_id: v.id, estado: v.estado } });
 
     if (v.estado !== 'solicitado') {
       // Ya no está disponible para otros conductores.
@@ -175,6 +178,7 @@ export async function avisarOfertaNueva(viajeId) {
     for (const c of conductores) io.in(`usuario:${c.usuario_id}`).socketsJoin(sala);
     // Solo el id: el conductor consulta GET /viajes/ofertas (que valida todo) para ver los datos.
     io.to(sala).emit('oferta:nueva', { viaje_id: Number(v.id) });
+    enviarPushNoBloqueante(conductores.map((c) => Number(c.usuario_id)), { titulo: 'Nuevo viaje cerca', cuerpo: 'Hay una solicitud de viaje cerca de tu ubicación.', data: { tipo: 'oferta_viaje', viaje_id: v.id } });
   } catch (e) {
     console.error('[tiempo real] avisarOfertaNueva:', e.message);
   }
@@ -220,6 +224,7 @@ export async function notificarPedidoActualizado(pedidoId, extra = {}) {
       estado_reembolso: p.estado_reembolso ?? 'no_aplica', ...extra,
     };
     for (const usuarioId of destinatarios) io.to(`usuario:${usuarioId}`).emit('pedido:estado', payload);
+    enviarPushNoBloqueante([...destinatarios], { titulo: 'Actualización de pedido', cuerpo: `Tu pedido cambió a: ${String(p.estado).replaceAll('_', ' ')}.`, data: { tipo: 'pedido_estado', pedido_id: p.id, estado: p.estado } });
     if (['entregado','cancelado','fallido','reembolso_pendiente'].includes(p.estado)) {
       io.to(`pedido:${p.id}`).emit('pedido:cerrado', payload);
       io.in(`pedido:${p.id}`).socketsLeave(`pedido:${p.id}`);
@@ -260,6 +265,7 @@ export async function avisarPedidoNuevo(pedidoId) {
     const p = filas[0];
     if (!p || p.estado !== 'creado') return;
     io.to(`usuario:${p.comercio_usuario_id}`).emit('pedido:nuevo', { pedido_id: Number(p.id) });
+    enviarPushNoBloqueante([Number(p.comercio_usuario_id)], { titulo: 'Nuevo pedido', cuerpo: 'Tienes un pedido nuevo. Abre De Volada para revisarlo.', data: { tipo: 'pedido_nuevo', pedido_id: p.id } });
   } catch (e) {
     console.error('[tiempo real] avisarPedidoNuevo:', e.message);
   }
@@ -298,6 +304,7 @@ export async function avisarOfertaDelivery(pedidoId) {
     for (const c of conductores) {
       io.to(`usuario:${c.usuario_id}`).emit('pedido:oferta', { pedido_id: Number(p.id) });
     }
+    enviarPushNoBloqueante(conductores.map((c) => Number(c.usuario_id)), { titulo: 'Nuevo delivery cerca', cuerpo: 'Hay un pedido para entregar cerca de tu ubicación.', data: { tipo: 'oferta_delivery', pedido_id: p.id } });
   } catch (e) {
     console.error('[tiempo real] avisarOfertaDelivery:', e.message);
   }
@@ -318,6 +325,8 @@ export async function emitirActualizacionEnvio(envioId, extra = {}) {
     const payload = { envio_id: Number(e.id), estado: e.estado, ...extra };
     const usuarios = new Set([e.remitente_id,e.destinatario_id,e.conductor_usuario_id].filter((id) => id != null).map(Number));
     for (const usuarioId of usuarios) io.to(`usuario:${usuarioId}`).emit('envio:estado', payload);
+    const textoPush = extra.notificacion || `El envío #${Number(e.id)} cambió a: ${String(e.estado).replaceAll('_', ' ')}.`;
+    enviarPushNoBloqueante([...usuarios], { titulo: 'Actualización de envío', cuerpo: textoPush, data: { tipo: 'envio_estado', envio_id: e.id, estado: e.estado } });
     if (e.estado !== 'solicitado') {
       io.to(`envio-ofertas:${e.id}`).emit('envio:oferta-cerrada', { envio_id: Number(e.id) });
       io.in(`envio-ofertas:${e.id}`).socketsLeave(`envio-ofertas:${e.id}`);
@@ -362,6 +371,7 @@ export async function avisarOfertaEnvio(envioId) {
     const sala = `envio-ofertas:${Number(e.id)}`;
     for (const c of conductores) io.to(`usuario:${c.usuario_id}`).socketsJoin(sala);
     io.to(sala).emit('envio:oferta', { envio_id: Number(e.id) });
+    enviarPushNoBloqueante(conductores.map((c) => Number(c.usuario_id)), { titulo: 'Nuevo envío cerca', cuerpo: 'Hay un paquete para recoger cerca de tu ubicación.', data: { tipo: 'oferta_envio', envio_id: e.id } });
   } catch (e) {
     console.error('[tiempo real] avisarOfertaEnvio:', e.message);
   }

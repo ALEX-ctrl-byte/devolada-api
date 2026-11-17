@@ -396,7 +396,8 @@ rutaAdmin.get('/envios', ...soloAdmin, async (req, res) => {
   const [envios] = await db.execute(
     `SELECT e.id,e.estado,e.tipo_vehiculo,e.descripcion_paquete,e.recogida_nombre,e.recogida_telefono,
             e.recogida_direccion,e.entrega_nombre,e.entrega_telefono,e.entrega_direccion,
-            e.distancia_m,e.tarifa_estimada,e.comision_monto,e.metodo_pago,e.creado_en,e.asignado_en,
+            e.distancia_m,e.tarifa_estimada,e.comision_monto,e.metodo_pago,e.cobra_paquete,e.importe_paquete,
+            e.estado_cobro_paquete,e.estado_cobro_delivery,e.paquete_cobrado_en,e.delivery_cobrado_en,e.delivery_cobrado_por,e.creado_en,e.asignado_en,
             e.recogido_en,e.llegada_en,e.entregado_en,
             ur.nombre AS remitente_nombre,ur.apellido AS remitente_apellido,
             ud.nombre AS destinatario_nombre,ud.apellido AS destinatario_apellido,

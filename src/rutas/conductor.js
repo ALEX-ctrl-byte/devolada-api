@@ -53,7 +53,7 @@ async function conTransaccion(fn) {
 // POST /conductor/postulacion
 // { documento_identidad, licencia_numero, licencia_categoria,
 //   moto: { placa, marca, modelo, anio?, color?, cilindrada_cc? } }
-// Crea la postulación (conductor + moto + billetera en cero) o la corrige mientras
+// Crea la postulación (conductor + moto + cuenta de operaciones en cero) o la corrige mientras
 // esté 'pendiente' o 'rechazada'. En revisión o aprobada no se puede modificar.
 // ---------------------------------------------------------------------
 rutaConductor.post('/postulacion', ...base, async (req, res) => {

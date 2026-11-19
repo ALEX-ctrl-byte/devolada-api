@@ -28,7 +28,6 @@ FRONTEND_URL=https://panel.usadevolada.com
 # --- Negocio ---
 WHATSAPP_BUSINESS_NUMBER=<<< CAMBIAR: 591XXXXXXXX >>>
 QR_RECARGA_DEUNA_URL=<<< CAMBIAR: https://.../imagen-qr.png >>>
-PUNTOS_POR_VIAJE=2
 VERSION_TERMINOS=2.3
 
 # --- Mapas ---
@@ -55,3 +54,6 @@ SPACES_SECRET=<<< CAMBIAR >>>
 FCM_SERVICE_ACCOUNT_JSON=
 # Opcional; por defecto se usa project_id leído del JSON de cuenta de servicio.
 FCM_PROJECT_ID=
+
+# Modelo fijo de consumo: 1 operación por viaje, envío/delivery o venta completada.
+# Recarga: Bs 2 = 1 operación; monto mínimo Bs 2 y múltiplos de Bs 2.

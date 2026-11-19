@@ -22,20 +22,20 @@ test('configuración de producción rechaza el proveedor OTP de consola y secret
 });
 
 test('la URL Android se configura fuera del código Kotlin', () => {
-  const gradle = fs.readFileSync(path.resolve(root, '../DeUna/app/build.gradle.kts'), 'utf8');
-  const kotlin = fs.readFileSync(path.resolve(root, '../DeUna/app/src/main/java/com/deuna/app/data/ApiConfig.kt'), 'utf8');
+  const gradle = fs.readFileSync(path.resolve(root, '../APP_ANDROID_DEVOLADA/app/build.gradle.kts'), 'utf8');
+  const kotlin = fs.readFileSync(path.resolve(root, '../APP_ANDROID_DEVOLADA/app/src/main/java/com/deuna/app/data/ApiConfig.kt'), 'utf8');
   assert.match(gradle, /DEUNA_API_BASE_URL/);
   assert.match(gradle, /Configura DEUNA_API_BASE_URL/);
   assert.doesNotMatch(gradle, /between-thereafter-powerful-foreign\.trycloudflare\.com/);
   assert.match(kotlin, /BuildConfig\.DEUNA_API_BASE_URL/);
   assert.doesNotMatch(kotlin, /trycloudflare\.com/);
-  assert.match(gradle, /MAPBOX_PUBLIC_TOKEN/);
-  assert.match(gradle, /resValue\([\s\S]*?\"mapbox_access_token\"/);
-  assert.equal(fs.existsSync(path.resolve(root, '../DeUna/app/src/main/res/values/mapbox_access_token.xml')), false, 'el recurso Mapbox debe generarse desde la configuración local, no usar un token placeholder');
+  assert.match(gradle, /org\.maplibre\.gl:android-sdk/);
+  assert.doesNotMatch(gradle, /MAPBOX_PUBLIC_TOKEN|mapbox_access_token/);
+  assert.equal(fs.existsSync(path.resolve(root, '../APP_ANDROID_DEVOLADA/app/src/main/res/values/mapbox_access_token.xml')), false, 'la app usa MapLibre sin token privado de Mapbox');
 });
 
 test('el panel contiene cola de reembolsos y controles de ciudad', (t) => {
-  const candidatos = [path.resolve(root, '../panel/src/App.jsx'), path.resolve(root, '../../../admin/panel/src/App.jsx')];
+  const candidatos = [path.resolve(root, '../panel-railway/src/App.jsx'), path.resolve(root, '../panel/src/App.jsx'), path.resolve(root, '../../../admin/panel/src/App.jsx')];
   const rutaPanel = candidatos.find((p) => fs.existsSync(p));
   if (!rutaPanel) return t.skip('El panel web no venía en los ZIP adjuntos; esta comprobación queda pendiente de recibir ese proyecto.');
   const js = fs.readFileSync(rutaPanel, 'utf8');
@@ -72,7 +72,7 @@ test('rutas declaradas por Android existen en las rutas HTTP montadas por la API
     rutaSesion: 'rutas/sesion.js', rutaCiudades: 'rutas/ciudades.js', rutaPerfil: 'rutas/perfil.js',
     rutaConductor: 'rutas/conductor.js', rutaAdmin: 'rutas/admin.js', rutaViajes: 'rutas/viajes.js',
     rutaComercio: 'rutas/comercio.js', rutaMedia: 'rutas/media.js',
-    rutaComerciosPublicos: 'rutas/comerciosPublicos.js', rutaBilletera: 'rutas/billetera.js', rutaPedidos: 'rutas/pedidos.js',
+    rutaComerciosPublicos: 'rutas/comerciosPublicos.js', rutaOperaciones: 'rutas/billetera.js', rutaPedidos: 'rutas/pedidos.js', rutaNotificaciones: 'rutas/notificaciones.js',
     rutaFeedback: 'rutas/feedback.js', rutaEnvios: 'rutas/envios.js', rutaUbicaciones: 'rutas/ubicaciones.js',
     rutaEntrar: 'rutas/entrar.js', rutaRegistroPin: 'rutas/registroPin.js', rutaCuenta: 'rutas/cuenta.js',
   };
@@ -91,7 +91,7 @@ test('rutas declaradas por Android existen en las rutas HTTP montadas por la API
       patronesServidor.add(`${metodo.toUpperCase()} ${normalizar(completa)}`);
     }
   }
-  const contratoAndroid = fs.readFileSync(path.resolve(root, '../DeUna/app/src/main/java/com/deuna/app/data/DeUnaApi.kt'), 'utf8');
+  const contratoAndroid = fs.readFileSync(path.resolve(root, '../APP_ANDROID_DEVOLADA/app/src/main/java/com/deuna/app/data/DeUnaApi.kt'), 'utf8');
   const ausentes = [];
   for (const m of contratoAndroid.matchAll(/@(GET|POST|PUT|PATCH|DELETE|retrofit2\.http\.DELETE)\("([^"]+)"\)/g)) {
     let metodo = m[1].toUpperCase().replace('RETROFIT2.HTTP.DELETE', 'DELETE');

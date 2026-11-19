@@ -18,7 +18,7 @@ import { rutaViajes } from './rutas/viajes.js';
 import { rutaComercio } from './rutas/comercio.js';
 import { rutaMedia } from './rutas/media.js';
 import { rutaComerciosPublicos } from './rutas/comerciosPublicos.js';
-import { rutaBilletera } from './rutas/billetera.js';
+import { rutaOperaciones } from './rutas/billetera.js';
 import { rutaPedidos } from './rutas/pedidos.js';
 import { rutaFeedback } from './rutas/feedback.js';
 import { rutaEnvios } from './rutas/envios.js';
@@ -93,7 +93,8 @@ app.use('/viajes', conCaptura(rutaViajes));
 app.use('/comercio', conCaptura(rutaComercio));
 app.use('/media', conCaptura(rutaMedia)); // solo logos e imágenes públicas de comercios
 app.use('/comercios', conCaptura(rutaComerciosPublicos)); // directorio público: solo comercios aprobados
-app.use('/billetera', conCaptura(rutaBilletera)); // saldo prepago exclusivo de comisiones para conductores y comercios
+app.use('/operaciones', conCaptura(rutaOperaciones)); // cuenta de operaciones para conductores y comercios
+app.use('/billetera', (_req, res) => error(res, 410, 'BILLETERA_REEMPLAZADA', 'La billetera fue reemplazada por Operaciones. Actualiza la aplicación.')); // bloquea el contrato anterior
 app.use('/pedidos', conCaptura(rutaPedidos)); // pedidos de comercio, asignación de delivery y cobros directos al receptor
 app.use(conCaptura(rutaFeedback)); // rutas con prefijos /calificaciones y /soporte ya declarados en el router
 app.use('/envios', conCaptura(rutaEnvios));

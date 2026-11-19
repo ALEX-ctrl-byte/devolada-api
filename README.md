@@ -1,6 +1,6 @@
 > **Despliegue en producción: ver [LEEME_RAILWAY.md](LEEME_RAILWAY.md).**
 
-# DeUna API — versión de trabajo 0.7.1 (Node.js)
+# De Volada API — versión de trabajo 0.7.2 (Node.js)
 
 API REST con Node.js 18+, Express y MySQL. Android nunca se conecta directo a la base de datos.
 
@@ -17,6 +17,17 @@ API REST con Node.js 18+, Express y MySQL. Android nunca se conecta directo a la
 4. `npm run dev` (reinicia solo al guardar cambios) o `npm start`.
 5. Abre http://localhost:3000/salud
 
+## Modelo de operaciones (cambio vigente)
+
+- Conductores y comercios usan **Operaciones**, no PTS ni saldo monetario de billetera.
+- Cada recarga verificada de Bs 2 acredita 1 operación; mínimo Bs 2 y múltiplos de Bs 2.
+- Cada viaje completado consume 1 operación al conductor; cada envío/delivery completado consume 1 al conductor y cada venta completada consume 1 al comercio.
+- La operación se reserva al aceptar y se consume al completar. La cancelación libera la reserva.
+- Pasajeros no tienen billetera ni pueden consultar operaciones.
+- No hay retiros, transferencias de operaciones entre usuarios ni envío de dinero entre usuarios. Los cobros de servicios se realizan directamente al conductor o comercio.
+- Ejecuta una sola vez `sql/migracion_operaciones_disponibles.sql` sobre la base `devolada`, con respaldo previo, antes de desplegar esta API. La migración convierte los saldos y reconstruye las reservas activas; conserva el historial antiguo de PTS sin mezclarlo con el nuevo libro de operaciones.
+- La ruta anterior `/billetera` responde HTTP 410; la ruta nueva es `/operaciones`.
+
 ## Endpoints
 | Método | Ruta      | Descripción                           |
 |--------|-----------|---------------------------------------|
@@ -29,7 +40,7 @@ API REST con Node.js 18+, Express y MySQL. Android nunca se conecta directo a la
 | POST   | /sesion/cerrar | Revoca el token actual (requiere token) |
 | GET    | /ciudades | Lista de ciudades activas |
 | PUT    | /perfil   | Completa ciudad, fecha de nacimiento y sexo (requiere token) |
-| GET    | /comercios | Directorio público de comercios aprobados con saldo de comisión disponible |
+| GET    | /comercios | Directorio público de comercios aprobados con operaciones disponibles |
 | GET    | /comercios/:id/productos | Catálogo público de un comercio publicado |
 | POST   | /pedidos | Crea un pedido, calcula delivery, congela precios y reserva comisión del comercio |
 | GET    | /pedidos/mios | Pedidos del pasajero actual |

@@ -849,16 +849,16 @@ rutaAdmin.post('/comercios/:id/rechazar', ...soloAdmin, async (req, res) => {
 });
 
 // ---------------------------------------------------------------------
-// Saldo de comisiones De Volada: revisión manual de recargas de conductores y comercios.
-// El saldo nunca se acredita desde el móvil; solo un admin autenticado puede confirmar un ingreso real.
+// Operaciones De Volada: revisión manual de recargas de conductores y comercios.
+// Solo un administrador puede acreditar tras verificar el ingreso real; Bs 2 = 1 operación.
 // ---------------------------------------------------------------------
-rutaAdmin.get('/billetera/recargas', ...soloAdmin, async (req, res) => {
+rutaAdmin.get('/operaciones/recargas', ...soloAdmin, async (req, res) => {
   const estado = String(req.query.estado ?? 'pendiente');
   if (!['pendiente', 'confirmada', 'rechazada'].includes(estado)) {
     return error(res, 422, 'DATOS_INVALIDOS', 'Estado de recarga no válido.');
   }
   const [recargas] = await db.execute(
-    `SELECT r.id, r.usuario_id, r.monto, r.metodo, r.referencia_cliente, r.referencia_pago,
+    `SELECT r.id, r.usuario_id, r.monto AS monto_bs, FLOOR(r.monto / 2) AS operaciones_a_acreditar, r.metodo, r.referencia_cliente, r.referencia_pago,
             r.estado, r.motivo_revision, r.solicitado_en, u.nombre, u.apellido, u.telefono, u.rol
        FROM recargas_billetera r JOIN usuarios u ON u.id=r.usuario_id
       WHERE r.estado=? ORDER BY r.solicitado_en ASC LIMIT 100`, [estado],
@@ -866,7 +866,7 @@ rutaAdmin.get('/billetera/recargas', ...soloAdmin, async (req, res) => {
   return ok(res, { recargas });
 });
 
-rutaAdmin.post('/billetera/recargas/:id/confirmar', ...soloAdmin, async (req, res) => {
+rutaAdmin.post('/operaciones/recargas/:id/confirmar', ...soloAdmin, async (req, res) => {
   if (!esId(req.params.id)) return error(res, 404, 'NO_ENCONTRADO', 'Solicitud de recarga no encontrada.');
   const referenciaPago = String(req.body?.referencia_pago ?? '').trim().slice(0, 100);
   if (referenciaPago.length < 3) return error(res, 422, 'DATOS_INVALIDOS', 'Indica la referencia del pago verificado.');
@@ -877,38 +877,41 @@ rutaAdmin.post('/billetera/recargas/:id/confirmar', ...soloAdmin, async (req, re
     if (r.estado !== 'pendiente') return { e: [409, 'ESTADO_INVALIDO', 'Esta recarga ya fue revisada.'] };
     const [us] = await cx.execute('SELECT id, rol FROM usuarios WHERE id=? LIMIT 1', [r.usuario_id]);
     const usuario = us[0];
-    if (!usuario || !['conductor', 'comercio'].includes(usuario.rol)) return { e: [409, 'ROL_NO_ADMITIDO', 'El saldo prepago para comisiones está disponible para conductores y comercios.'] };
+    if (!usuario || !['conductor', 'comercio'].includes(usuario.rol)) return { e: [409, 'ROL_NO_ADMITIDO', 'Las operaciones están disponibles para conductores y comercios.'] };
     let saldoAntes;
     let saldoDespues;
+    const montoBs = Math.round((Number(r.monto) + Number.EPSILON) * 100) / 100;
+    if (montoBs < 2 || Math.abs(montoBs / 2 - Math.round(montoBs / 2)) >= 0.000001) return { e: [409, 'RECARGA_LEGADA_INVALIDA', 'Esta solicitud antigua no cumple el mínimo de Bs 2 ni la regla de múltiplos de Bs 2. Recházala y solicita una nueva recarga.'] };
+    const operacionesAcreditadas = Math.floor(montoBs / 2);
     if (usuario.rol === 'conductor') {
       const [bs] = await cx.execute(
         `SELECT b.id, b.saldo_prepago, b.estado FROM billeteras b JOIN conductores c ON c.id=b.conductor_id
           WHERE c.usuario_id=? LIMIT 1 FOR UPDATE`, [r.usuario_id],
       );
       const b = bs[0];
-      if (!b || b.estado !== 'activa') return { e: [409, 'BILLETERA_NO_ACTIVA', 'La billetera de comisiones del conductor no está activa.'] };
+      if (!b || b.estado !== 'activa') return { e: [409, 'BILLETERA_NO_ACTIVA', 'La cuenta de operaciones del conductor no está activa.'] };
       saldoAntes = Number(b.saldo_prepago);
-      saldoDespues = Math.round((saldoAntes + Number(r.monto) + Number.EPSILON) * 100) / 100;
+      saldoDespues = Math.floor(saldoAntes) + operacionesAcreditadas;
       await cx.execute('UPDATE billeteras SET saldo_prepago=? WHERE id=?', [saldoDespues, b.id]);
       await cx.execute(
         `INSERT INTO movimientos_billetera (billetera_id, cuenta, tipo, monto, saldo_antes, saldo_despues, descripcion, creado_por, idempotency_key)
          VALUES (?, 'prepago', 'recarga', ?, ?, ?, ?, ?, ?)`,
-        [b.id, Number(r.monto), saldoAntes, saldoDespues, `Recarga de puntos verificada #${r.id}: +${Number(r.monto)} pts`, req.usuario.id, `recarga:${r.id}`],
+        [b.id, operacionesAcreditadas, saldoAntes, saldoDespues, `Recarga verificada #${r.id}: +${operacionesAcreditadas} operaciones (Bs ${Number(r.monto).toFixed(2)})`, req.usuario.id, `recarga:${r.id}`],
       );
     } else {
       const [es] = await cx.execute(
         `SELECT id, saldo_comision FROM empresas WHERE usuario_id=? LIMIT 1 FOR UPDATE`, [r.usuario_id],
       );
       const empresa = es[0];
-      if (!empresa) return { e: [409, 'COMERCIO_INCOMPLETO', 'El comercio no tiene una cuenta de comisiones activa.'] };
+      if (!empresa) return { e: [409, 'COMERCIO_INCOMPLETO', 'El comercio no tiene una cuenta de operaciones activa.'] };
       saldoAntes = Number(empresa.saldo_comision);
-      saldoDespues = Math.round((saldoAntes + Number(r.monto) + Number.EPSILON) * 100) / 100;
+      saldoDespues = Math.floor(saldoAntes) + operacionesAcreditadas;
       await cx.execute('UPDATE empresas SET saldo_comision=? WHERE id=?', [saldoDespues, empresa.id]);
       await cx.execute(
         `INSERT INTO movimientos_comision_comercio
            (empresa_id, tipo, monto, saldo_antes, saldo_despues, recarga_id, descripcion, idempotency_key, creado_por)
          VALUES (?, 'recarga', ?, ?, ?, ?, ?, ?, ?)`,
-        [empresa.id, Number(r.monto), saldoAntes, saldoDespues, r.id, `Recarga de puntos verificada #${r.id}: +${Number(r.monto)} pts`, `recarga:${r.id}`, req.usuario.id],
+        [empresa.id, operacionesAcreditadas, saldoAntes, saldoDespues, r.id, `Recarga verificada #${r.id}: +${operacionesAcreditadas} operaciones (Bs ${Number(r.monto).toFixed(2)})`, `recarga:${r.id}`, req.usuario.id],
       );
     }
     await cx.execute(
@@ -917,15 +920,15 @@ rutaAdmin.post('/billetera/recargas/:id/confirmar', ...soloAdmin, async (req, re
       [referenciaPago, req.usuario.id, r.id],
     );
     await auditar(cx, req, 'recarga_billetera_confirmada', 'recargas_billetera', r.id,
-      { estado: 'pendiente' }, { estado: 'confirmada', usuario_id: r.usuario_id, monto: Number(r.monto), referencia_pago: referenciaPago, saldo_despues: saldoDespues });
-    // Bs depositados = puntos acreditados (1 a 1). Los puntos no son dinero ni se pueden retirar.
-    return { recarga_id: Number(r.id), estado: 'confirmada', usuario_id: Number(r.usuario_id), monto_bs: Number(r.monto), saldo_despues_bs: saldoDespues, puntos_acreditados: Number(r.monto), puntos_saldo: saldoDespues };
+      { estado: 'pendiente' }, { estado: 'confirmada', usuario_id: r.usuario_id, monto_bs: Number(r.monto), operaciones_acreditadas: operacionesAcreditadas, referencia_pago: referenciaPago, saldo_despues: saldoDespues });
+    // Las recargas deben ser múltiplos de Bs 2; cada Bs 2 acredita una operación.
+    return { recarga_id: Number(r.id), estado: 'confirmada', usuario_id: Number(r.usuario_id), monto_bs: Number(r.monto), operaciones_acreditadas: operacionesAcreditadas, operaciones_total: saldoDespues };
   });
   if (resultado.e) return error(res, ...resultado.e);
   return ok(res, resultado);
 });
 
-rutaAdmin.post('/billetera/recargas/:id/rechazar', ...soloAdmin, async (req, res) => {
+rutaAdmin.post('/operaciones/recargas/:id/rechazar', ...soloAdmin, async (req, res) => {
   if (!esId(req.params.id)) return error(res, 404, 'NO_ENCONTRADO', 'Solicitud de recarga no encontrada.');
   const m = validarMotivo(req.body?.motivo);
   if (m.error) return error(res, 422, 'DATOS_INVALIDOS', 'Hay datos que corregir.', { motivo: m.error });
@@ -946,73 +949,15 @@ rutaAdmin.post('/billetera/recargas/:id/rechazar', ...soloAdmin, async (req, res
   return ok(res, resultado);
 });
 
-rutaAdmin.get('/billetera/retiros', ...soloAdmin, async (req, res) => {
-  const estado = String(req.query.estado ?? 'solicitado');
-  if (!['solicitado', 'en_revision', 'aprobado', 'pagado', 'rechazado', 'cancelado'].includes(estado)) {
-    return error(res, 422, 'DATOS_INVALIDOS', 'Estado de retiro no válido.');
-  }
-  const [retiros] = await db.execute(
-    `SELECT r.id, r.monto, r.metodo, r.destino_detalle, r.estado, r.referencia_pago, r.solicitado_en,
-            u.id AS usuario_id, u.nombre, u.apellido, u.telefono
-       FROM retiros r JOIN billeteras b ON b.id=r.billetera_id
-       JOIN conductores c ON c.id=b.conductor_id JOIN usuarios u ON u.id=c.usuario_id
-      WHERE r.estado=? ORDER BY r.solicitado_en ASC LIMIT 100`, [estado],
-  );
-  return ok(res, { retiros });
-});
-
-rutaAdmin.post('/billetera/retiros/:id/pagar', ...soloAdmin, async (req, res) => {
-  if (!esId(req.params.id)) return error(res, 404, 'NO_ENCONTRADO', 'Solicitud de retiro no encontrada.');
-  const referencia = String(req.body?.referencia_pago ?? '').trim().slice(0, 100);
-  if (referencia.length < 3) return error(res, 422, 'DATOS_INVALIDOS', 'Indica la referencia del desembolso realizado.');
-  const resultado = await conTransaccion(async (cx) => {
-    const [rs] = await cx.execute('SELECT id, monto, estado FROM retiros WHERE id=? LIMIT 1 FOR UPDATE', [req.params.id]);
-    const r = rs[0];
-    if (!r) return { e: [404, 'NO_ENCONTRADO', 'Solicitud de retiro no encontrada.'] };
-    if (!['solicitado', 'en_revision', 'aprobado'].includes(r.estado)) return { e: [409, 'ESTADO_INVALIDO', 'Este retiro ya fue cerrado.'] };
-    await cx.execute(
-      `UPDATE retiros SET estado='pagado', referencia_pago=?, revisado_por=?, revisado_en=UTC_TIMESTAMP(), pagado_en=UTC_TIMESTAMP() WHERE id=?`,
-      [referencia, req.usuario.id, r.id],
-    );
-    await auditar(cx, req, 'retiro_billetera_pagado', 'retiros', r.id,
-      { estado: r.estado }, { estado: 'pagado', monto: Number(r.monto), referencia_pago: referencia });
-    return { id: Number(r.id), estado: 'pagado', referencia_pago: referencia };
-  });
-  if (resultado.e) return error(res, ...resultado.e);
-  return ok(res, resultado);
-});
-
-rutaAdmin.post('/billetera/retiros/:id/rechazar', ...soloAdmin, async (req, res) => {
-  if (!esId(req.params.id)) return error(res, 404, 'NO_ENCONTRADO', 'Solicitud de retiro no encontrada.');
-  const m = validarMotivo(req.body?.motivo);
-  if (m.error) return error(res, 422, 'DATOS_INVALIDOS', 'Hay datos que corregir.', { motivo: m.error });
-  const resultado = await conTransaccion(async (cx) => {
-    const [rs] = await cx.execute('SELECT * FROM retiros WHERE id=? LIMIT 1 FOR UPDATE', [req.params.id]);
-    const r = rs[0];
-    if (!r) return { e: [404, 'NO_ENCONTRADO', 'Solicitud de retiro no encontrada.'] };
-    if (!['solicitado', 'en_revision', 'aprobado'].includes(r.estado)) return { e: [409, 'ESTADO_INVALIDO', 'Este retiro ya fue cerrado.'] };
-    const [bs] = await cx.execute('SELECT id, saldo_ganancias FROM billeteras WHERE id=? LIMIT 1 FOR UPDATE', [r.billetera_id]);
-    const b = bs[0];
-    if (!b) return { e: [409, 'BILLETERA_NO_CREADA', 'No se encontró la billetera del conductor.'] };
-    const antes = Number(b.saldo_ganancias);
-    const despues = Math.round((antes + Number(r.monto) + Number.EPSILON) * 100) / 100;
-    await cx.execute('UPDATE billeteras SET saldo_ganancias=? WHERE id=?', [despues, b.id]);
-    await cx.execute(
-      `INSERT INTO movimientos_billetera (billetera_id, cuenta, tipo, monto, saldo_antes, saldo_despues, retiro_id, descripcion, creado_por, idempotency_key)
-       VALUES (?, 'ganancias', 'reembolso', ?, ?, ?, ?, ?, ?, ?)`,
-      [b.id, Number(r.monto), antes, despues, r.id, `Devolución del retiro rechazado #${r.id}`, req.usuario.id, `reembolso:retiro:${r.id}`],
-    );
-    await cx.execute(
-      `UPDATE retiros SET estado='rechazado', motivo_rechazo=?, revisado_por=?, revisado_en=UTC_TIMESTAMP() WHERE id=?`,
-      [m.motivo, req.usuario.id, r.id],
-    );
-    await auditar(cx, req, 'retiro_billetera_rechazado', 'retiros', r.id,
-      { estado: r.estado }, { estado: 'rechazado', monto: Number(r.monto), motivo: m.motivo, saldo_reintegrado: despues });
-    return { id: Number(r.id), estado: 'rechazado', saldo_ganancias_bs: despues };
-  });
-  if (resultado.e) return error(res, ...resultado.e);
-  return ok(res, resultado);
-});
+// No hay retiros ni desembolsos: las operaciones no son dinero. Se conserva la ruta
+// únicamente para devolver una respuesta explícita a clientes antiguos.
+const retirosNoDisponibles = (_req, res) => error(res, 410, 'RETIROS_NO_DISPONIBLES', 'De Volada no permite retirar dinero ni operaciones.');
+rutaAdmin.all('/billetera/retiros', ...soloAdmin, retirosNoDisponibles);
+rutaAdmin.all('/operaciones/retiros', ...soloAdmin, retirosNoDisponibles);
+rutaAdmin.all('/billetera/retiros/:id/pagar', ...soloAdmin, retirosNoDisponibles);
+rutaAdmin.all('/billetera/retiros/:id/rechazar', ...soloAdmin, retirosNoDisponibles);
+rutaAdmin.all('/operaciones/retiros/:id/pagar', ...soloAdmin, retirosNoDisponibles);
+rutaAdmin.all('/operaciones/retiros/:id/rechazar', ...soloAdmin, retirosNoDisponibles);
 
 // ---------------------------------------------------------------------
 // Cola de conciliación: operaciones que alcanzaron el destino pero tenían un saldo
@@ -1042,27 +987,36 @@ rutaAdmin.post('/pedidos/:id/resolver-finalizacion', ...soloAdmin, async (req, r
     const [ws] = await cx.execute('SELECT id,saldo_prepago,saldo_comision_reservado FROM billeteras WHERE conductor_id=? LIMIT 1 FOR UPDATE', [p.conductor_id]);
     const [es] = await cx.execute('SELECT id,saldo_comision,saldo_comision_reservado FROM empresas WHERE id=? LIMIT 1 FOR UPDATE', [p.empresa_id]);
     const w = ws[0], e = es[0];
-    if (!w || !e) return { e: [409, 'CUENTAS_INCOMPLETAS', 'No se encontró la billetera del conductor o el saldo de comisión del comercio.'] };
-    const comDelivery = Math.round((Number(p.comision_monto) + Number.EPSILON) * 100) / 100;
-    const comVenta = Math.round((Number(p.comision_venta_monto) + Number.EPSILON) * 100) / 100;
+    if (!w || !e) return { e: [409, 'CUENTAS_INCOMPLETAS', 'No se encontró la cuenta de operaciones del conductor o del comercio.'] };
+    // Cada pedido completado consume una operación del conductor por delivery
+    // y una del comercio por venta. Esta conciliación usa la misma regla que la ruta normal.
+    const comDelivery = config.operacionesPorServicio;
+    const comVenta = config.operacionesPorServicio;
+    if (Number(p.comision_delivery_reservada) !== 1 || Number(p.comision_venta_reservada) !== 1) {
+      return { e: [409, 'RESERVA_NO_VALIDA', 'El pedido no conserva las dos operaciones reservadas. Debe revisarse antes de finalizar.'] };
+    }
     const [[otherOrdersDriver]] = await cx.execute(
-      `SELECT COALESCE(SUM(comision_monto),0) AS total FROM pedidos
+      `SELECT COUNT(*) AS total FROM pedidos
         WHERE conductor_id=? AND id<>? AND comision_delivery_reservada=1 AND estado IN ('asignado','recogido','en_camino','requiere_revision')`, [p.conductor_id,p.id],
     );
     const [[otherTripsDriver]] = await cx.execute(
-      `SELECT COALESCE(SUM(COALESCE(comision_monto, ROUND(tarifa_estimada*comision_porcentaje/100,0))),0) AS total FROM viajes
+      `SELECT COUNT(*) AS total FROM viajes
         WHERE conductor_id=? AND comision_reservada=1 AND estado IN ('aceptado','conductor_llego','en_curso','requiere_revision')`, [p.conductor_id],
     );
-    const reservadoOtrosDriver = Number(otherOrdersDriver.total) + Number(otherTripsDriver.total);
+    const [[otherEnviosDriver]] = await cx.execute(
+      `SELECT COUNT(*) AS total FROM envios
+        WHERE conductor_id=? AND comision_reservada=1 AND estado IN ('asignado','recogido','en_camino','en_punto_entrega','requiere_revision')`, [p.conductor_id],
+    );
+    const reservadoOtrosDriver = Number(otherOrdersDriver.total) + Number(otherTripsDriver.total) + Number(otherEnviosDriver.total);
     const [[otherOrdersCompany]] = await cx.execute(
-      `SELECT COALESCE(SUM(comision_venta_monto),0) AS total FROM pedidos
+      `SELECT COUNT(*) AS total FROM pedidos
         WHERE empresa_id=? AND id<>? AND comision_venta_reservada=1 AND estado IN ('creado','buscando_repartidor','asignado','recogido','en_camino','requiere_revision')`, [p.empresa_id,p.id],
     );
     const reservadoOtrosComercio = Number(otherOrdersCompany.total);
-    if (Number(w.saldo_prepago) < reservadoOtrosDriver + comDelivery) return { e: [409, 'SALDO_CONDUCTOR_INSUFICIENTE', 'Recarga o concilia el saldo prepago del conductor antes de resolver este pedido.', { saldo_bs: Number(w.saldo_prepago), reservas_activas_bs: reservadoOtrosDriver, comision_pedido_bs: comDelivery }] };
-    if (Number(e.saldo_comision) < reservadoOtrosComercio + comVenta) return { e: [409, 'SALDO_COMERCIO_INSUFICIENTE', 'El comercio debe tener saldo suficiente para la comisión y las reservas activas antes de resolver este pedido.', { saldo_bs: Number(e.saldo_comision), reservas_activas_bs: reservadoOtrosComercio, comision_pedido_bs: comVenta }] };
-    const wAntes = Number(w.saldo_prepago), wDespues = Math.round((wAntes - comDelivery + Number.EPSILON) * 100) / 100;
-    const eAntes = Number(e.saldo_comision), eDespues = Math.round((eAntes - comVenta + Number.EPSILON) * 100) / 100;
+    if (Number(w.saldo_prepago) < reservadoOtrosDriver + comDelivery) return { e: [409, 'SALDO_CONDUCTOR_INSUFICIENTE', 'Recarga o concilia las operaciones disponibles del conductor antes de resolver este pedido.', { operaciones_total: Number(w.saldo_prepago), operaciones_reservadas: reservadoOtrosDriver, operaciones_requeridas: comDelivery }] };
+    if (Number(e.saldo_comision) < reservadoOtrosComercio + comVenta) return { e: [409, 'SALDO_COMERCIO_INSUFICIENTE', 'El comercio debe tener saldo suficiente para la comisión y las reservas activas antes de resolver este pedido.', { operaciones_total: Number(e.saldo_comision), operaciones_reservadas: reservadoOtrosComercio, operaciones_requeridas: comVenta }] };
+    const wAntes = Number(w.saldo_prepago), wDespues = Math.floor(wAntes - comDelivery);
+    const eAntes = Number(e.saldo_comision), eDespues = Math.floor(eAntes - comVenta);
     await cx.execute('UPDATE billeteras SET saldo_prepago=?,saldo_comision_reservado=? WHERE id=?', [wDespues,reservadoOtrosDriver,w.id]);
     await cx.execute('UPDATE empresas SET saldo_comision=?,saldo_comision_reservado=? WHERE id=?', [eDespues,reservadoOtrosComercio,e.id]);
     if (comDelivery > 0) await cx.execute(
@@ -1076,10 +1030,10 @@ rutaAdmin.post('/pedidos/:id/resolver-finalizacion', ...soloAdmin, async (req, r
       [e.id,-comVenta,eAntes,eDespues,p.id,`Comisión venta pedido #${p.id} (revisión admin)`,`comision:venta:pedido:${p.id}`,req.usuario.id],
     );
     await cx.execute("UPDATE pedidos SET estado='entregado',entregado_en=COALESCE(entregado_en,UTC_TIMESTAMP()),comision_delivery_reservada=0,comision_venta_reservada=0,revision_motivo=NULL WHERE id=?", [p.id]);
-    const minSaldo = config.puntosPorViaje;
+    const minSaldo = config.operacionesPorServicio;
     await cx.execute('UPDATE conductores SET estado_operativo=? WHERE id=?', [wDespues - reservadoOtrosDriver < minSaldo ? 'bloqueado_saldo' : 'disponible', p.conductor_id]);
-    await auditar(cx, req, 'pedido_revision_resuelto', 'pedidos', p.id, { estado: p.estado, revision_motivo: p.revision_motivo }, { estado: 'entregado', comision_conductor_bs: comDelivery, comision_comercio_bs: comVenta, resuelto_por: req.usuario.id });
-    return { pedido_id: Number(p.id), estado: 'entregado', comision_conductor_bs: comDelivery, comision_comercio_bs: comVenta, mensaje: 'Pedido conciliado y finalizado. Los dos descuentos quedaron registrados.' };
+    await auditar(cx, req, 'pedido_revision_resuelto', 'pedidos', p.id, { estado: p.estado, revision_motivo: p.revision_motivo }, { estado: 'entregado', operaciones_conductor: comDelivery, operaciones_comercio: comVenta, resuelto_por: req.usuario.id });
+    return { pedido_id: Number(p.id), estado: 'entregado', operaciones_conductor: comDelivery, operaciones_comercio: comVenta, mensaje: 'Pedido conciliado y finalizado. Los dos descuentos quedaron registrados.' };
   });
   if (resultado.e) return error(res, ...resultado.e);
   await notificarPedidoActualizado(Number(req.params.id));
@@ -1107,32 +1061,35 @@ rutaAdmin.post('/viajes/:id/resolver-finalizacion', ...soloAdmin, async (req, re
     if (v.estado !== 'requiere_revision') return { e: [409, 'ESTADO_INVALIDO', 'El viaje ya no está en la cola de revisión.'] };
     const [ws] = await cx.execute('SELECT id,saldo_prepago,saldo_comision_reservado FROM billeteras WHERE conductor_id=? LIMIT 1 FOR UPDATE', [v.conductor_id]);
     const w = ws[0];
-    if (!w) return { e: [409, 'BILLETERA_NO_CREADA', 'El conductor no tiene billetera activa.'] };
+    if (!w) return { e: [409, 'BILLETERA_NO_CREADA', 'El conductor no tiene una cuenta de operaciones activa.'] };
     const [[otherOrders]] = await cx.execute(
-      `SELECT COALESCE(SUM(comision_monto),0) AS total FROM pedidos WHERE conductor_id=? AND comision_delivery_reservada=1 AND estado IN ('asignado','recogido','en_camino','requiere_revision')`, [v.conductor_id],
+      `SELECT COUNT(*) AS total FROM pedidos WHERE conductor_id=? AND comision_delivery_reservada=1 AND estado IN ('asignado','recogido','en_camino','requiere_revision')`, [v.conductor_id],
     );
     const [[otherTrips]] = await cx.execute(
-      `SELECT COALESCE(SUM(COALESCE(comision_monto, ROUND(tarifa_estimada*comision_porcentaje/100,0))),0) AS total FROM viajes
+      `SELECT COUNT(*) AS total FROM viajes
         WHERE conductor_id=? AND id<>? AND comision_reservada=1 AND estado IN ('aceptado','conductor_llego','en_curso','requiere_revision')`, [v.conductor_id,v.id],
     );
-    const reservasOtras = Number(otherOrders.total) + Number(otherTrips.total);
+    const [[otherEnvios]] = await cx.execute(
+      `SELECT COUNT(*) AS total FROM envios WHERE conductor_id=? AND comision_reservada=1 AND estado IN ('asignado','recogido','en_camino','en_punto_entrega','requiere_revision')`, [v.conductor_id],
+    );
+    const reservasOtras = Number(otherOrders.total) + Number(otherTrips.total) + Number(otherEnvios.total);
     const tarifa = Math.round(Number(v.tarifa_estimada) || 0);
-    // Sistema de puntos: descuento fijo por viaje completado.
-    const comision = config.puntosPorViaje;
+    // Sistema de operaciones: descuento fijo por viaje completado.
+    const comision = config.operacionesPorServicio;
     const ganancia = tarifa;
-    if (Number(w.saldo_prepago) < reservasOtras + comision) return { e: [409, 'SALDO_INSUFICIENTE', 'Recarga o concilia el saldo libre del conductor antes de resolver el viaje.', { saldo_bs: Number(w.saldo_prepago), reservas_activas_bs: reservasOtras, comision_bs: comision }] };
-    const antes = Number(w.saldo_prepago), despues = Math.round((antes - comision + Number.EPSILON) * 100) / 100;
+    if (Number(w.saldo_prepago) < reservasOtras + comision) return { e: [409, 'SALDO_INSUFICIENTE', 'Recarga o concilia el saldo libre del conductor antes de resolver el viaje.', { operaciones_total: Number(w.saldo_prepago), operaciones_reservadas: reservasOtras, operaciones_requeridas: comision }] };
+    const antes = Number(w.saldo_prepago), despues = Math.floor(antes - comision);
     await cx.execute('UPDATE billeteras SET saldo_prepago=?,saldo_comision_reservado=? WHERE id=?', [despues,reservasOtras,w.id]);
     if (comision > 0) await cx.execute(
       `INSERT INTO movimientos_billetera (billetera_id,cuenta,tipo,monto,saldo_antes,saldo_despues,viaje_id,descripcion,creado_por,idempotency_key)
        VALUES (?,'prepago','comision',?,?,?,?,?,?,?)`,
-      [w.id,-comision,antes,despues,v.id,`Comisión viaje #${v.id}: -${comision} pts (revisión admin)`,req.usuario.id,`comision:viaje:${v.id}`],
+      [w.id,-comision,antes,despues,v.id,`Comisión viaje #${v.id}: -${comision} operaciones (revisión admin)`,req.usuario.id,`comision:viaje:${v.id}`],
     );
     await cx.execute("UPDATE viajes SET estado='finalizado',tarifa_final=?,comision_monto=?,ganancia_conductor=?,finalizado_en=COALESCE(finalizado_en,UTC_TIMESTAMP()),comision_reservada=0,motivo_revision=NULL WHERE id=?", [tarifa,comision,ganancia,v.id]);
-    const minSaldo = config.puntosPorViaje;
+    const minSaldo = config.operacionesPorServicio;
     await cx.execute('UPDATE conductores SET estado_operativo=?,total_viajes=total_viajes+1 WHERE id=?', [despues-reservasOtras < minSaldo ? 'bloqueado_saldo' : 'disponible',v.conductor_id]);
-    await auditar(cx, req, 'viaje_revision_resuelto', 'viajes', v.id, { estado: v.estado, motivo_revision: v.motivo_revision }, { estado: 'finalizado', comision_bs: comision, saldo_despues: despues });
-    return { viaje_id: Number(v.id), estado: 'finalizado', comision_bs: comision, saldo_comision_conductor_bs: despues, mensaje: 'Viaje conciliado y finalizado.' };
+    await auditar(cx, req, 'viaje_revision_resuelto', 'viajes', v.id, { estado: v.estado, motivo_revision: v.motivo_revision }, { estado: 'finalizado', operaciones_descontadas: comision, operaciones_restantes: despues });
+    return { viaje_id: Number(v.id), estado: 'finalizado', operaciones_descontadas: comision, operaciones_restantes: despues, mensaje: 'Viaje conciliado y finalizado.' };
   });
   if (resultado.e) return error(res, ...resultado.e);
   await notificarEstadoViaje(Number(req.params.id));

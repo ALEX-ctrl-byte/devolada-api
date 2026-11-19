@@ -23,7 +23,7 @@ const PRIVACIDAD = `
 
 3. Uso de la ubicación. Para clientes y remitentes, la ubicación del dispositivo ayuda a centrar el mapa, elegir origen/destino y calcular rutas y tarifas mientras se utiliza la app. Para conductores y repartidores, la ubicación precisa puede transmitirse mientras estén disponibles o tengan un servicio activo, incluso con la pantalla apagada mediante el servicio en primer plano y su notificación visible, para asignación, seguimiento y seguridad. Al desconectarse y no tener servicio activo debe cesar el seguimiento operativo.
 
-4. Finalidades. Crear y proteger cuentas; revisar y aprobar perfiles; conectar pasajeros, conductores, repartidores, comercios y destinatarios; seleccionar direcciones; calcular rutas y tarifas; asignar y seguir servicios; validar recogidas y entregas; mostrar QR a las personas autorizadas; registrar confirmaciones de cobro declaradas por sus respectivos receptores; gestionar puntos y comisiones; prevenir fraude; enviar notificaciones; atender soporte y cumplir obligaciones legales.
+4. Finalidades. Crear y proteger cuentas; revisar y aprobar perfiles; conectar pasajeros, conductores, repartidores, comercios y destinatarios; seleccionar direcciones; calcular rutas y tarifas; asignar y seguir servicios; validar recogidas y entregas; mostrar QR a las personas autorizadas; registrar confirmaciones de cobro declaradas por sus respectivos receptores; gestionar operaciones internas y pagos directos; prevenir fraude; enviar notificaciones; atender soporte y cumplir obligaciones legales.
 
 5. Compartición de datos y proveedores.
 • Participantes: el pasajero/cliente puede ver datos necesarios del conductor asignado; el conductor ve datos y direcciones necesarias para recoger y entregar; el destinatario puede ver el QR de la persona remitente solo durante la entrega autorizada; los comercios y repartidores reciben los datos necesarios para preparar y completar pedidos.
@@ -46,7 +46,7 @@ const TERMINOS = `
 
 2. Aceptación, edad y registro. La aplicación está destinada a personas mayores de 18 años. Para registrarte proporcionas datos reales, un número celular boliviano, un PIN y aceptas estos Términos y la Política de Privacidad. La cuenta puede quedar pendiente de revisión: el teléfono y la información se verifican conforme al proceso de activación por WhatsApp y aprobación administrativa que indique la aplicación. No compartas tu PIN ni los códigos temporales de recogida o entrega.
 
-3. Puntos internos y comisiones. Los puntos de la billetera son unidades operativas internas: no son dinero, depósito, crédito, préstamo ni instrumento financiero; no generan intereses, no se retiran, transfieren ni canjean por dinero. Los conductores y repartidores necesitan puntos para aceptar servicios y la aplicación informa el descuento aplicable antes o al completar el servicio. Las recargas se solicitan mediante el QR oficial y quedan sujetas a verificación administrativa del abono real. Una captura de pantalla no acredita un depósito. Las reglas, saldo y movimientos se muestran en la app.
+3. Operaciones internas. Los conductores y comercios utilizan operaciones internas para acceder a los servicios de la plataforma. No son dinero, depósito, crédito, préstamo ni instrumento financiero; no generan intereses, no se retiran, transfieren ni canjean por dinero. Cada viaje, envío/delivery o venta completada consume una operación según corresponda. Cada Bs 2 de recarga verificada acredita una operación; el mínimo es Bs 2 y las recargas deben ser múltiplos de Bs 2. Las solicitudes se acreditan únicamente después de que administración verifica el abono real en la cuenta oficial. Una captura no acredita un depósito. Las operaciones y sus movimientos se muestran únicamente a conductores y comercios.
 
 4. Naturaleza del servicio. De Volada facilita el contacto, solicitud, asignación, seguimiento y coordinación tecnológica. Los conductores y comercios prestan sus servicios bajo su propia responsabilidad y deben cumplir la normativa aplicable. Las rutas, distancias, tarifas y tiempos son estimaciones que pueden variar por tráfico, clima, cobertura, GPS y condiciones de la vía.
 
@@ -66,7 +66,7 @@ const TERMINOS = `
 8. Reglas para conductores y repartidores.
 • Solo puedes recibir servicios cuando De Volada haya aprobado tu cuenta, vehículo y documentos requeridos. Mantén licencia, SOAT y demás documentos vigentes.
 • Cumple las normas de tránsito: casco para ti y para el pasajero, cinturón de seguridad en automóvil, cero alcohol o drogas y no utilices el celular de forma insegura.
-• Necesitas puntos suficientes para aceptar servicios; los descuentos aplicables se registran en la billetera.
+• Conductores y comercios necesitan operaciones suficientes para recibir servicios o pedidos; cada servicio o venta completada consume una operación.
 • Mientras estés disponible o tengas un servicio activo, la app puede transmitir tu ubicación precisa para asignaciones, seguimiento y seguridad, conforme a los permisos del dispositivo.
 • En envíos verifica el código de recogida antes de recibir el paquete. En destino, confirma únicamente la tarifa del delivery que realmente recibiste. Nunca confirmes el cobro del valor del paquete por cuenta de la persona remitente.
 • No entregues el paquete hasta que la app habilite el código final. Introduce el código de entrega que te muestre el destinatario después de recibir el paquete y completar los pagos.
@@ -156,5 +156,5 @@ rutaLegal.get('/eliminar-cuenta', (_req, res) => {
 <h2>Qué datos se eliminan</h2>
 <ul><li>Se anonimizan tu nombre, celular, correo, fecha de nacimiento y sexo.</li><li>Se borran tus documentos (identidad, licencia), fotos y tu última ubicación.</li><li>Se desactiva tu acceso y tu sesión.</li></ul>
 <h2>Qué datos pueden conservarse</h2>
-<p>Sin identificarte, podemos conservar el historial de servicios y los movimientos de puntos el tiempo necesario por seguridad, reclamos y obligaciones legales.</p>`));
+<p>Sin identificarte, podemos conservar el historial de servicios y los movimientos de operaciones el tiempo necesario por seguridad, reclamos y obligaciones legales.</p>`));
 });

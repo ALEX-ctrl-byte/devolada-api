@@ -60,8 +60,6 @@ services:
         value: "CAMBIAR"
       - key: OSRM_BASE_URL
         value: "https://router.project-osrm.org"
-      - key: PUNTOS_POR_VIAJE
-        value: "2"
       - key: VERSION_TERMINOS
         value: "1.0"
       - key: STADIA_MAPS_API_KEY

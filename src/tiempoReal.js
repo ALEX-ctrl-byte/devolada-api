@@ -283,7 +283,7 @@ export async function avisarOfertaDelivery(pedidoId) {
     if (!p || p.estado !== 'buscando_repartidor') return;
     const radioKm = Math.max(1, Math.min(20, await ajusteNumero('radio_busqueda_delivery_km', 5)));
     const edad = Math.max(5, Math.min(120, Math.floor(await ajusteNumero('ubicacion_max_antiguedad_s', 30))));
-    // Sistema de puntos: basta con cubrir los puntos del pedido; no hay mínimo adicional.
+    // Sistema de operaciones: basta con cubrir los operaciones del pedido; no hay mínimo adicional.
     const minSaldo = 0;
     const [conductores] = await db.execute(
       `SELECT c.usuario_id
@@ -348,7 +348,7 @@ export async function avisarOfertaEnvio(envioId) {
     if (!e || e.estado !== 'solicitado') return;
     const radioKm = Math.max(1, Math.min(20, await ajusteNumero('radio_busqueda_delivery_km', 5)));
     const edad = Math.max(5, Math.min(120, Math.floor(await ajusteNumero('ubicacion_max_antiguedad_s', 30))));
-    // Sistema de puntos: basta con cubrir los puntos del envío; no hay mínimo adicional.
+    // Sistema de operaciones: basta con cubrir los operaciones del envío; no hay mínimo adicional.
     const saldoMinimo = 0;
     const [conductores] = await db.execute(
       `SELECT DISTINCT c.usuario_id

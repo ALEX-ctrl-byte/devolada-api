@@ -103,7 +103,7 @@ async function pedidoDetalle(cx, id, usuarioId, rolUsuario) {
     estado_pago_producto: p.estado_pago_producto, estado_pago_delivery: p.estado_pago_delivery,
     estado_reembolso: p.estado_reembolso ?? 'no_aplica', referencia_reembolso: esComercio ? p.referencia_reembolso : null,
     reembolso_solicitado_en: p.reembolso_solicitado_en, reembolso_en: p.reembolso_en,
-    comision_monto: enteroBs(p.comision_monto), comision_venta_monto: Number(p.comision_venta_monto),
+    operaciones_delivery_requeridas: Math.floor(Number(p.comision_monto ?? 0)), operaciones_venta_requeridas: Math.floor(Number(p.comision_venta_monto ?? 0)),
     creado_en: p.creado_en, expira_en: p.expira_en, actualizado_en: p.actualizado_en,
     asignado_en: p.asignado_en, recogido_en: p.recogido_en, entregado_en: p.entregado_en,
     cancelado_en: p.cancelado_en, revision_motivo: esComercio ? p.revision_motivo : null,
@@ -158,7 +158,7 @@ async function comprobarSaldoComercio(cx, empresaId, monto) {
   const e = rows[0];
   if (!e) return { e: [404, 'COMERCIO_NO_ENCONTRADO', 'No se encontró el comercio.'] };
   const disponible = saldoDisponible(e.saldo_comision, e.saldo_comision_reservado);
-  if (disponible < monto) return { e: [409, 'SALDO_COMISION_COMERCIO_INSUFICIENTE', `El comercio no tiene puntos suficientes (se necesitan ${monto} puntos por pedido). Debe recargar puntos para recibir pedidos.`, { saldo_comision_bs: Number(e.saldo_comision), reservado_bs: Number(e.saldo_comision_reservado), disponible_bs: disponible, requerido_bs: monto, puntos_disponibles: disponible, puntos_requeridos: monto }] };
+  if (disponible < monto) return { e: [409, 'SALDO_COMISION_COMERCIO_INSUFICIENTE', `El comercio no tiene operaciones suficientes (se necesitan ${monto} operaciones por venta). Debe recargar operaciones para recibir pedidos.`, { operaciones_total: Number(e.saldo_comision), operaciones_reservadas: Number(e.saldo_comision_reservado), operaciones_disponibles: disponible, operaciones_requeridas: monto }] };
   return { empresa: e, disponible };
 }
 
@@ -278,20 +278,19 @@ rutaPedidos.post('/cotizar-delivery', async (req, res) => {
   const ahora = Math.floor(Date.now() / 1000);
   const tarifaBs = enteroBs(calculo.tarifa_bs);
   const comisionPct = porcentaje(await ajusteNumero('comision_porcentaje_delivery', 10));
-  // Sistema de puntos: la comisión de delivery es un descuento fijo de puntos (comisionPct queda como histórico).
-  const comisionBs = config.puntosPorViaje;
+  // Sistema de operaciones: la comisión de delivery es un descuento fijo de operaciones (comisionPct queda como histórico).
   const datos = {
     v: 1, tipo_servicio: 'delivery_comercio', usuario_id: Number(req.usuario.id), empresa_id: empresaId, tipo_vehiculo: tipoVehiculo,
     origen, destino: { lat: entregaLat, lng: entregaLng }, distancia_m: Number(ruta.distancia_m),
     duracion_estimada_s: Number(ruta.duracion_estimada_s), tarifa_bs: tarifaBs,
-    comision_porcentaje: comisionPct, comision_bs: comisionBs,
+    comision_porcentaje: comisionPct, operaciones_por_venta: config.operacionesPorServicio,
     detalle_tarifa: calculo.detalle, expira_en: ahora + 180,
   };
   return ok(res, {
     cotizacion_token: crearTokenCotizacionTarifa(datos), expira_en: new Date((ahora + 180) * 1000).toISOString(),
     empresa_id: empresaId, tipo_vehiculo_delivery: tipoVehiculo, distancia_m: datos.distancia_m,
     duracion_estimada_min: Math.max(1, Math.round(datos.duracion_estimada_s / 60)),
-    tarifa_envio_bs: datos.tarifa_bs, comision_delivery_bs: datos.comision_bs, comision_puntos: datos.comision_bs,
+    tarifa_envio_bs: datos.tarifa_bs, operaciones_delivery_requeridas: config.operacionesPorServicio,
     comision_porcentaje: datos.comision_porcentaje, detalle_tarifa: datos.detalle_tarifa, moneda: 'BOB',
   });
 });
@@ -373,8 +372,8 @@ rutaPedidos.post('/', async (req, res) => {
     }
   }
   const tarifaEnvio = enteroBs(calculoTarifa.tarifa_bs);
-  // Sistema de puntos: siempre config.puntosPorViaje puntos por pedido completado (se ignora el valor de cotizaciones antiguas).
-  const comisionDelivery = config.puntosPorViaje;
+  // Sistema de operaciones: siempre config.operacionesPorServicio operaciones por venta completada (se ignora el valor de cotizaciones antiguas).
+  const comisionDelivery = config.operacionesPorServicio;
 
   const resultado = await tx(async (cx) => {
     const [dupe] = await cx.execute('SELECT id, pasajero_id FROM pedidos WHERE empresa_id=? AND idempotency_key=? LIMIT 1 FOR UPDATE', [empresaId, clave]);
@@ -416,8 +415,8 @@ rutaPedidos.post('/', async (req, res) => {
       lineas.push({ producto_id: Number(prod.id), nombre: prod.nombre, cantidad, unit, importe, notas: String(listaRaw.find((x) => Number(x?.producto_id) === Number(prod.id))?.notas ?? '').trim().slice(0, 255) || null, stock: prod.stock });
     }
     if (subtotal <= 0) return { e: [422, 'TOTAL_INVALIDO', 'El subtotal de productos debe ser mayor que cero.'] };
-    // Sistema de puntos: el comercio también paga una cantidad fija de puntos por pedido completado.
-    const comisionVenta = config.puntosPorViaje;
+    // Sistema de operaciones: el comercio también paga una cantidad fija de operaciones por pedido completado.
+    const comisionVenta = config.operacionesPorServicio;
     const saldo = await comprobarSaldoComercio(cx, empresaId, comisionVenta);
     if (saldo.e) return saldo;
 
@@ -504,7 +503,7 @@ rutaPedidos.get('/comercio/mios', async (req, res) => {
        FROM pedidos p LEFT JOIN usuarios u ON u.id=p.pasajero_id WHERE ${where}
       ORDER BY p.creado_en DESC LIMIT 100`, params,
   );
-  return ok(res, { pedidos: rows.map((x) => ({ ...x, id: Number(x.id), subtotal_productos: Number(x.subtotal_productos), tarifa_envio: enteroBs(x.tarifa_envio), monto_a_cobrar: Number(x.monto_a_cobrar), comision_venta_monto: Number(x.comision_venta_monto), comision_monto: enteroBs(x.comision_monto) })) });
+  return ok(res, { pedidos: rows.map((x) => ({ ...x, id: Number(x.id), subtotal_productos: Number(x.subtotal_productos), tarifa_envio: enteroBs(x.tarifa_envio), monto_a_cobrar: Number(x.monto_a_cobrar), operaciones_venta_requeridas: Math.floor(Number(x.comision_venta_monto ?? 0)), operaciones_delivery_requeridas: Math.floor(Number(x.comision_monto ?? 0)) })) });
 });
 
 rutaPedidos.get('/conductor/ofertas', async (req, res) => {
@@ -520,12 +519,12 @@ rutaPedidos.get('/conductor/ofertas', async (req, res) => {
        LEFT JOIN conductor_ubicacion cu ON cu.conductor_id=c.id WHERE c.usuario_id=? LIMIT 1`, [req.usuario.id],
   );
   const c = cs[0];
-  if (!c || c.estado_aprobacion !== 'aprobado' || c.estado_operativo !== 'disponible' || c.billetera_estado !== 'activa') return error(res, 409, 'CONDUCTOR_NO_DISPONIBLE', 'Debes estar aprobado, conectado y con una billetera activa.');
+  if (!c || c.estado_aprobacion !== 'aprobado' || c.estado_operativo !== 'disponible' || c.billetera_estado !== 'activa') return error(res, 409, 'CONDUCTOR_NO_DISPONIBLE', 'Debes estar aprobado, conectado y con una cuenta de operaciones activa.');
   if (c.latitud == null || c.longitud == null || Number(c.es_mock) === 1 || Number(c.ubicacion_reciente) !== 1) return error(res, 409, 'UBICACION_NO_ACTUALIZADA', 'Actualiza tu ubicación GPS antes de recibir pedidos.');
-  // Sistema de puntos: basta con tener los puntos de un servicio; no hay mínimo adicional en Bs.
+  // Sistema de operaciones: basta con tener las operaciones de un servicio; no hay mínimo adicional en Bs.
   const minSaldo = 0;
   const disponible = saldoDisponible(c.saldo_prepago, c.saldo_comision_reservado);
-  if (disponible < config.puntosPorViaje) return error(res, 409, 'SALDO_COMISION_INSUFICIENTE', `Recarga puntos para recibir delivery. Necesitas al menos ${config.puntosPorViaje} puntos.`, { disponible_bs: disponible, minimo_bs: config.puntosPorViaje, puntos_disponibles: disponible, puntos_requeridos: config.puntosPorViaje });
+  if (disponible < config.operacionesPorServicio) return error(res, 409, 'SALDO_COMISION_INSUFICIENTE', `Recarga operaciones para recibir delivery. Necesitas al menos ${config.operacionesPorServicio} operación.`, { operaciones_disponibles: disponible, operaciones_requeridas: config.operacionesPorServicio });
   const radio = Math.max(1, Math.min(20, await ajusteNumero('radio_busqueda_delivery_km', 5)));
   const [rows] = await db.execute(
     `SELECT p.id,p.empresa_id,p.estado,p.nombre_comercial,p.recogida_lat,p.recogida_lng,p.recogida_direccion,
@@ -542,8 +541,8 @@ rutaPedidos.get('/conductor/ofertas', async (req, res) => {
       ORDER BY distancia_recogida_m ASC,p.creado_en ASC LIMIT 40`,
     [Number(c.longitud),Number(c.latitud),c.tipo_vehiculo,c.qr_pago_url,c.qr_pago_vence_en,Number(c.longitud),Number(c.latitud),radio*1000],
   );
-  const ofertas = rows.filter((o) => disponible >= Number(o.comision_monto) + minSaldo).map((o) => ({ ...o, tarifa_envio: enteroBs(o.tarifa_envio), comision_monto: enteroBs(o.comision_monto) }));
-  return ok(res, { ofertas, radio_km: radio, saldo_comision_disponible_bs: disponible });
+  const ofertas = rows.filter((o) => disponible >= Number(o.comision_monto) + minSaldo).map((o) => ({ ...o, tarifa_envio: enteroBs(o.tarifa_envio), operaciones_delivery_requeridas: Math.floor(Number(o.comision_monto)) }));
+  return ok(res, { ofertas, radio_km: radio, operaciones_disponibles_conductor: disponible });
 });
 
 rutaPedidos.get('/conductor/activos', async (req, res) => {
@@ -715,7 +714,7 @@ rutaPedidos.post('/:id/aceptar', async (req, res) => {
         WHERE c.usuario_id=? LIMIT 1 FOR UPDATE`, [req.usuario.id],
     );
     const c = cs[0];
-    if (!c || c.estado_aprobacion !== 'aprobado' || c.estado_operativo !== 'disponible' || c.billetera_estado !== 'activa' || !c.moto_id) return { e: [409, 'CONDUCTOR_NO_DISPONIBLE', 'Debes tener cuenta aprobada, vehículo registrado, billetera activa y estar disponible.'] };
+    if (!c || c.estado_aprobacion !== 'aprobado' || c.estado_operativo !== 'disponible' || c.billetera_estado !== 'activa' || !c.moto_id) return { e: [409, 'CONDUCTOR_NO_DISPONIBLE', 'Debes tener cuenta aprobada, vehículo registrado, cuenta de operaciones activa y estar disponible.'] };
     if (String(c.tipo_vehiculo) !== String(p.tipo_vehiculo_delivery ?? 'moto')) return { e: [409, 'VEHICULO_NO_COINCIDE', `Este pedido requiere ${p.tipo_vehiculo_delivery ?? 'moto'}.`] };
     if (p.metodo_pago_delivery === 'qr' && (!c.qr_pago_url || Number(c.qr_vigente) !== 1)) return { e: [409, 'QR_CONDUCTOR_NO_CONFIGURADO', 'Sube o renueva tu QR bancario; el QR guardado no está vigente.'] };
     if (c.restringido_hasta && new Date(c.restringido_hasta).getTime() > Date.now()) return { e: [403, 'CUENTA_RESTRINGIDA', 'Tu cuenta tiene una restricción temporal.'] };
@@ -740,10 +739,10 @@ rutaPedidos.post('/:id/aceptar', async (req, res) => {
     const [activeOrders] = await cx.execute("SELECT id FROM pedidos WHERE conductor_id=? AND estado IN ('asignado','recogido','en_camino') LIMIT 1 FOR UPDATE", [c.conductor_id]);
     const [activeEnvios] = await cx.execute("SELECT id FROM envios WHERE conductor_id=? AND estado IN ('asignado','recogido','en_camino','en_punto_entrega','requiere_revision') LIMIT 1 FOR UPDATE", [c.conductor_id]);
     if (activeTrips[0] || activeOrders[0] || activeEnvios[0]) return { e: [409, 'SERVICIO_ACTIVO', 'Termina el viaje o delivery activo antes de aceptar otro servicio.'] };
-    // Sistema de puntos: se reservan exactamente los puntos del pedido (fijados al crearlo).
+    // Sistema de operaciones: se reservan exactamente las operaciones del pedido (fijados al crearlo).
     const disponible = saldoDisponible(c.saldo_prepago, c.saldo_comision_reservado);
     const requerido = DINERO(Number(p.comision_monto));
-    if (disponible < requerido) return { e: [409, 'SALDO_INSUFICIENTE', `No tienes puntos suficientes para aceptar este pedido. Necesitas ${requerido} puntos disponibles; recarga puntos para seguir recibiendo servicios.`, { disponible_bs: disponible, requerido_bs: requerido, comision_bs: Number(p.comision_monto), minimo_bs: 0, puntos_disponibles: disponible, puntos_requeridos: requerido }] };
+    if (disponible < requerido) return { e: [409, 'SALDO_INSUFICIENTE', `No tienes operaciones suficientes para aceptar este pedido. Necesitas ${requerido} operaciones disponibles; recarga operaciones para seguir recibiendo servicios.`, { operaciones_disponibles: disponible, operaciones_requeridas: requerido }] };
     await cx.execute('UPDATE billeteras SET saldo_comision_reservado=saldo_comision_reservado+? WHERE id=?', [Number(p.comision_monto),c.billetera_id]);
     await cx.execute(
       `UPDATE pedidos SET estado='asignado',conductor_id=?,moto_id=?,asignado_en=UTC_TIMESTAMP(),
@@ -770,7 +769,7 @@ rutaPedidos.post('/:id/soltar', async (req, res) => {
     await liberarReservaConductor(cx, p);
     await cx.execute(`UPDATE pedidos SET estado='buscando_repartidor',conductor_id=NULL,moto_id=NULL,asignado_en=NULL,qr_conductor_snapshot=NULL,comision_delivery_reservada=0 WHERE id=?`, [id]);
     const [wallets] = await cx.execute('SELECT saldo_prepago,saldo_comision_reservado FROM billeteras WHERE conductor_id=? LIMIT 1', [p.conductor_id]);
-    const minSaldo = config.puntosPorViaje;
+    const minSaldo = config.operacionesPorServicio;
     const disponible = saldoDisponible(wallets[0]?.saldo_prepago, wallets[0]?.saldo_comision_reservado);
     await cx.execute('UPDATE conductores SET estado_operativo=? WHERE id=?', [disponible >= minSaldo ? 'disponible' : 'bloqueado_saldo', p.conductor_id]);
     return { pedido_id: id, estado: 'buscando_repartidor', mensaje: 'Pedido devuelto a la bolsa de ofertas. La compra del cliente sigue activa.' };
@@ -845,7 +844,7 @@ rutaPedidos.post('/:id/finalizar', async (req, res) => {
       'SELECT id,saldo_prepago,saldo_comision_reservado FROM billeteras WHERE conductor_id=? LIMIT 1 FOR UPDATE', [p.conductor_id],
     );
     const w = ws[0];
-    const comDelivery = enteroBs(p.comision_monto);
+    const comDelivery = Math.floor(Number(p.comision_monto));
     const [es] = await cx.execute('SELECT id,saldo_comision,saldo_comision_reservado FROM empresas WHERE id=? LIMIT 1 FOR UPDATE', [p.empresa_id]);
     const e = es[0];
     const comVenta = DINERO(p.comision_venta_monto);
@@ -870,7 +869,7 @@ rutaPedidos.post('/:id/finalizar', async (req, res) => {
       await cx.execute(
         `INSERT INTO movimientos_billetera (billetera_id,cuenta,tipo,monto,saldo_antes,saldo_despues,pedido_id,descripcion,idempotency_key)
          VALUES (?,'prepago','comision',?,?,?,?,?,?)`,
-        [w.id,-comDelivery,saldoDriverAntes,saldoDriverDespues,id,`Comisión pedido #${id}: -${comDelivery} pts`,`comision:pedido:${id}`],
+        [w.id,-comDelivery,saldoDriverAntes,saldoDriverDespues,id,`Pedido #${id}: -${comDelivery} operaciones de delivery`,`comision:pedido:${id}`],
       );
     }
     const saldoEmpresaAntes = Number(e.saldo_comision);
@@ -880,19 +879,18 @@ rutaPedidos.post('/:id/finalizar', async (req, res) => {
       await cx.execute(
         `INSERT INTO movimientos_comision_comercio (empresa_id,tipo,monto,saldo_antes,saldo_despues,pedido_id,descripcion,idempotency_key)
          VALUES (?,'comision_venta',?,?,?,?,?,?)`,
-        [e.id,-comVenta,saldoEmpresaAntes,saldoEmpresaDespues,id,`Comisión venta pedido #${id}: -${comVenta} pts`,`comision:venta:pedido:${id}`],
+        [e.id,-comVenta,saldoEmpresaAntes,saldoEmpresaDespues,id,`Venta del pedido #${id}: -${comVenta} operaciones`,`comision:venta:pedido:${id}`],
       );
     }
     await cx.execute("UPDATE pedidos SET estado='entregado',entregado_en=UTC_TIMESTAMP(),comision_delivery_reservada=0,comision_venta_reservada=0 WHERE id=?", [id]);
-    const saldoMinimo = config.puntosPorViaje;
+    const saldoMinimo = config.operacionesPorServicio;
     await cx.execute("UPDATE conductores SET estado_operativo=? WHERE id=? AND estado_operativo='en_viaje'", [saldoDriverDespues < saldoMinimo ? 'bloqueado_saldo' : 'disponible', p.conductor_id]);
     return { pedido_id: id, estado: 'entregado', subtotal_productos_bs: Number(p.subtotal_productos), tarifa_delivery_bs: enteroBs(p.tarifa_envio),
-      comision_comercio_bs: comVenta, saldo_comision_comercio_bs: saldoEmpresaDespues,
-      comision_conductor_bs: comDelivery, saldo_comision_conductor_bs: saldoDriverDespues,
+      operaciones_descontadas_comercio: comVenta, operaciones_restantes_comercio: saldoEmpresaDespues,
+      operaciones_descontadas_conductor: comDelivery, operaciones_restantes_conductor: saldoDriverDespues,
       conductor_puede_seguir_operando: saldoDriverDespues >= saldoMinimo,
       liquidacion_comercio: 'no_aplica: los productos se pagan directamente al QR del comercio',
-      puntos_descontados_conductor: comDelivery, puntos_descontados_comercio: comVenta,
-      mensaje: 'Delivery finalizado. Se descontaron los puntos De Volada del conductor y del comercio; los cobros de cliente siguen siendo directos al efectivo/QR de sus receptores.' };
+      mensaje: 'Delivery finalizado. Se descontó una operación al conductor y una operación al comercio. Los cobros de cliente siguen siendo directos a cada receptor por efectivo o QR.' };
   });
   if (resultado?.e) return error(res, ...resultado.e);
   if (resultado?.requiere_revision) {

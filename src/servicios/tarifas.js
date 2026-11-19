@@ -138,8 +138,8 @@ export async function calcularTarifaDeUna({ tipoServicio, tipoVehiculo: tipoEntr
   const umbralMuchos = Math.max(2, Math.min(50, Math.floor(await ajusteNumero('tarifa_umbral_muchos_conductores', 5))));
   const baseNormal = enteroBs(await ajusteNumero('tarifa_base_normal_bs', 4));
   const baseExcesoOferta = enteroBs(await ajusteNumero('tarifa_base_muchos_conductores_bs', 3));
-  // Sistema de puntos: cuentan como oferta los conductores con puntos para al menos un servicio.
-  const saldoMinimo = config.puntosPorViaje;
+  // Sistema de operaciones: cuentan como oferta los conductores con operaciones para al menos un servicio.
+  const saldoMinimo = config.operacionesPorServicio;
 
   const [oferta, demanda] = await Promise.all([
     leerOfertaConductores(origen, tipoVehiculo, radioCercanoKm, radioAproximacionKm, gpsMax, saldoMinimo),

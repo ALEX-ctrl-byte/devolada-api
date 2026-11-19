@@ -117,9 +117,9 @@ La API ya está preparada para Cloudflare:
 | `OTP_SECRET` | secreto largo | Obligatorio en producción. Se usa para firmar datos internos. |
 | `JWT_SECRET` | secreto largo | Reservado. La versión actual usa tokens de sesión guardados con hash y no lo lee. |
 | `WHATSAPP_BUSINESS_NUMBER` | `591XXXXXXXXX` | Número que recibe las solicitudes de activación por WhatsApp. |
-| `QR_RECARGA_DEUNA_URL` | URL HTTPS | Imagen del QR oficial para recargar puntos. |
+| `QR_RECARGA_DEUNA_URL` | URL HTTPS | Imagen del QR oficial para recargar operaciones. |
 | `OSRM_BASE_URL` | `https://router.project-osrm.org` | Cálculo de rutas. |
-| `PUNTOS_POR_VIAJE` | `2` | Puntos que se descuentan por servicio completado. |
+| — | — | El modelo es fijo: Bs 2 = 1 operación; cada viaje, envío/delivery o venta completada consume 1. No se configura por variable. |
 | `VERSION_TERMINOS` | `1.0` | Versión vigente de los términos y condiciones. |
 
 Para generar un secreto: `node -e "console.log(require('crypto').randomBytes(48).toString('hex'))"`

@@ -107,7 +107,7 @@ function mostrarEnvio(e, usuarioId, incluirPinEntrega = false) {
     distancia_m: e.distancia_m == null ? null : Number(e.distancia_m), duracion_estimada_s: e.duracion_estimada_s == null ? null : Number(e.duracion_estimada_s),
     distancia_aproximacion_m: e.distancia_aproximacion_m == null ? null : Number(e.distancia_aproximacion_m), duracion_aproximacion_s: e.duracion_aproximacion_s == null ? null : Number(e.duracion_aproximacion_s),
     detalle_tarifa: typeof e.detalle_tarifa_json === 'string' ? (() => { try { return JSON.parse(e.detalle_tarifa_json); } catch { return null; } })() : (e.detalle_tarifa_json ?? null), tarifa_estimada: enteroBs(e.tarifa_estimada),
-    comision_monto: enteroBs(e.comision_monto), metodo_pago: e.metodo_pago, metodo_pago_delivery: e.metodo_pago,
+    operaciones_requeridas: Math.floor(Number(e.comision_monto)), metodo_pago: e.metodo_pago, metodo_pago_delivery: e.metodo_pago,
     cobra_paquete: Number(e.cobra_paquete) === 1, importe_paquete: dinero(e.importe_paquete ?? 0),
     estado_cobro_paquete: e.estado_cobro_paquete ?? 'no_aplica', estado_cobro_delivery: e.estado_cobro_delivery ?? 'no_aplica',
     paquete_cobrado_en: e.paquete_cobrado_en ?? null, delivery_cobrado_en: e.delivery_cobrado_en ?? null,
@@ -154,13 +154,13 @@ rutaEnvios.post('/cotizar', async (req, res) => {
   const ahora = Math.floor(Date.now() / 1000);
   const tarifaBs = enteroBs(calculo.tarifa_bs);
   const comisionPorcentaje = Math.max(0, Math.min(100, await ajusteNumero('comision_porcentaje_delivery', 10)));
-  // Sistema de puntos: descuento fijo por envío completado (comisionPorcentaje queda como histórico).
-  const comisionBs = config.puntosPorViaje;
+  // Sistema de operaciones: descuento fijo por envío completado (comisionPorcentaje queda como histórico).
+  const operacionesRequeridas = config.operacionesPorServicio;
   const tokenDatos = {
     v: 1, tipo_servicio: 'envio_persona_a_persona', usuario_id: Number(req.usuario.id), tipo_vehiculo: tipoVehiculo,
     origen: { lat: Number(oLat), lng: Number(oLng) }, destino: { lat: Number(dLat), lng: Number(dLng) },
     distancia_m: Number(ruta.distancia_m), duracion_estimada_s: Number(ruta.duracion_estimada_s),
-    tarifa_bs: tarifaBs, comision_porcentaje: comisionPorcentaje, comision_bs: comisionBs,
+    tarifa_bs: tarifaBs, comision_porcentaje: comisionPorcentaje, operaciones_requeridas: operacionesRequeridas,
     detalle_tarifa: calculo.detalle, expira_en: ahora + 180,
   };
   return ok(res, {
@@ -168,7 +168,7 @@ rutaEnvios.post('/cotizar', async (req, res) => {
     expira_en: new Date((ahora + 180) * 1000).toISOString(),
     tipo_vehiculo: tipoVehiculo, distancia_m: tokenDatos.distancia_m,
     duracion_estimada_min: Math.max(1, Math.round(tokenDatos.duracion_estimada_s / 60)),
-    tarifa_estimada_bs: tokenDatos.tarifa_bs, comision_estimada_bs: tokenDatos.comision_bs, comision_puntos: tokenDatos.comision_bs,
+    tarifa_estimada_bs: tokenDatos.tarifa_bs, operaciones_estimadas: tokenDatos.operaciones_requeridas, operaciones_por_servicio: tokenDatos.operaciones_requeridas,
     comision_porcentaje: tokenDatos.comision_porcentaje, detalle_tarifa: tokenDatos.detalle_tarifa, moneda: 'BOB',
   });
 });
@@ -259,8 +259,8 @@ rutaEnvios.post('/', async (req, res) => {
   const porcentaje = cotizacionConfirmada
     ? Math.max(0, Math.min(100, Number(cotizacionConfirmada.comision_porcentaje)))
     : Math.max(0, Math.min(100, await ajusteNumero('comision_porcentaje_delivery', 10)));
-  // Sistema de puntos: siempre config.puntosPorViaje puntos por envío completado.
-  const comision = config.puntosPorViaje;
+  // Sistema de operaciones: siempre config.operacionesPorServicio operaciones por envío completado.
+  const comision = config.operacionesPorServicio;
   const pickupPin = generarCodigoOtp();
   const result = await tx(async (cx) => {
     const [ex] = await cx.execute('SELECT id, estado, codigo_recogida_cifrado FROM envios WHERE remitente_id=? AND idempotency_key=? LIMIT 1 FOR UPDATE', [req.usuario.id, key]);
@@ -366,8 +366,8 @@ rutaEnvios.get('/conductor/ofertas', async (req,res) => {
        FROM envios e WHERE e.estado='solicitado' AND e.tipo_vehiculo=? AND (e.metodo_pago<>'qr' OR (? IS NOT NULL AND ? > UTC_TIMESTAMP()))
          AND ST_Distance_Sphere(POINT(?,?),POINT(e.recogida_lng,e.recogida_lat)) <= ?
        ORDER BY e.creado_en ASC LIMIT 30`,[d.tipo_vehiculo,d.qr_pago_url,d.qr_pago_vence_en,Number(d.longitud),Number(d.latitud),radio*1000]);
-  // Sistema de puntos: solo se requiere cubrir los puntos del envío.
-  return ok(res,{envios: rows.filter(e => disponible >= Number(e.comision_monto)).map(e=>({...e,id:Number(e.id),distancia_m:e.distancia_m==null?null:Number(e.distancia_m),tarifa_estimada:enteroBs(e.tarifa_estimada),comision_monto:enteroBs(e.comision_monto)}))});
+  // Sistema de operaciones: solo se requiere cubrir las operaciones del envío.
+  return ok(res,{envios: rows.filter(e => disponible >= Number(e.comision_monto)).map(e=>({...e,id:Number(e.id),distancia_m:e.distancia_m==null?null:Number(e.distancia_m),tarifa_estimada:enteroBs(e.tarifa_estimada),operaciones_requeridas:Math.floor(Number(e.comision_monto))}))});
 });
 
 rutaEnvios.get('/conductor/activos', async (req,res) => {
@@ -405,9 +405,9 @@ rutaEnvios.post('/:id/aceptar', async (req,res) => {
     const [act] = await cx.execute("SELECT id FROM viajes WHERE conductor_id=? AND estado IN ('aceptado','conductor_llego','en_curso','requiere_revision') UNION ALL SELECT id FROM pedidos WHERE conductor_id=? AND estado IN ('asignado','recogido','en_camino','requiere_revision') UNION ALL SELECT id FROM envios WHERE conductor_id=? AND estado IN ('asignado','recogido','en_camino','en_punto_entrega','requiere_revision') LIMIT 1",[c.conductor_id,c.conductor_id,c.conductor_id]);
     if(act.length) return {e:[409,'SERVICIO_ACTIVO','Termina tu servicio activo antes de aceptar un envío.']};
     const libre=Math.max(0,Number(c.saldo_prepago)-Number(c.saldo_comision_reservado??0));
-    // Sistema de puntos: se reservan exactamente los puntos fijados al crear el envío.
+    // Sistema de operaciones: se reservan exactamente las operaciones fijadas al crear el envío.
     const requerido=dinero(Number(e.comision_monto));
-    if(libre<requerido) return {e:[409,'SALDO_INSUFICIENTE',`No tienes puntos suficientes para aceptar este envío. Necesitas ${requerido} puntos disponibles; recarga puntos para seguir recibiendo servicios.`,{disponible_bs:libre,requerido_bs:requerido,puntos_disponibles:libre,puntos_requeridos:requerido}]};
+    if(libre<requerido) return {e:[409,'SALDO_INSUFICIENTE',`No tienes operaciones suficientes para aceptar este envío. Necesitas ${requerido} operaciones disponibles; recarga operaciones para seguir recibiendo servicios.`,{operaciones_disponibles:Math.floor(libre),operaciones_requeridas:Math.floor(requerido)}]};
     await cx.execute('UPDATE billeteras SET saldo_comision_reservado=saldo_comision_reservado+? WHERE id=?',[Number(e.comision_monto),c.billetera_id]);
     await cx.execute("UPDATE envios SET estado='asignado',conductor_id=?,asignado_en=UTC_TIMESTAMP(),qr_conductor_snapshot=?,comision_reservada=1 WHERE id=? AND estado='solicitado'",[c.conductor_id,c.qr_pago_url,id]);
     await cx.execute("UPDATE conductores SET estado_operativo='en_viaje' WHERE id=?",[c.conductor_id]);
@@ -537,7 +537,7 @@ rutaEnvios.post('/:id/entregar', async (req,res) => {
     }
     const [cs]=await cx.execute('SELECT id FROM conductores WHERE usuario_id=? LIMIT 1 FOR UPDATE',[req.usuario.id]);
     const [bs]=await cx.execute('SELECT id,saldo_prepago,saldo_comision_reservado FROM billeteras WHERE conductor_id=? LIMIT 1 FOR UPDATE',[cs[0]?.id]);
-    const wallet=bs[0]; if(!wallet) return {e:[409,'BILLETERA_NO_CREADA','No encontramos tu billetera de comisiones.']};
+    const wallet=bs[0]; if(!wallet) return {e:[409,'OPERACIONES_NO_ACTIVADAS','No encontramos tu cuenta de operaciones.']};
     const saldo=Number(wallet.saldo_prepago), reserva=Number(wallet.saldo_comision_reservado??0), comision=Number(e.comision_monto);
     if(Number(e.comision_reservada)!==1 || reserva < comision || saldo < comision) {
       await cx.execute("UPDATE envios SET estado='requiere_revision' WHERE id=?",[id]);
@@ -547,9 +547,9 @@ rutaEnvios.post('/:id/entregar', async (req,res) => {
     const despues=dinero(saldo-comision);
     await cx.execute('UPDATE billeteras SET saldo_prepago=?,saldo_comision_reservado=GREATEST(0,saldo_comision_reservado-?) WHERE id=?',[despues,comision,wallet.id]);
     if(comision>0) await cx.execute("INSERT INTO movimientos_billetera (billetera_id,cuenta,tipo,monto,saldo_antes,saldo_despues,pedido_id,descripcion,idempotency_key) VALUES (?,'prepago','comision',?,?,?,?,?,?)",
-      [wallet.id,-comision,saldo,despues,null,`Comisión envío #${id}: -${comision} pts`,`comision:envio:${id}`]);
+      [wallet.id,-comision,saldo,despues,null,`Operación por envío completado #${id}: -${comision}`,`comision:envio:${id}`]);
     await cx.execute("UPDATE envios SET estado='entregado',entregado_en=UTC_TIMESTAMP(),comision_reservada=0,codigo_entrega_hash=NULL,codigo_entrega_cifrado=NULL WHERE id=?",[id]);
-    await cx.execute("UPDATE conductores SET estado_operativo=IF(? >= ?, 'disponible','bloqueado_saldo') WHERE id=? AND estado_operativo='en_viaje'",[dinero(saldo-comision),config.puntosPorViaje,cs[0].id]);
+    await cx.execute("UPDATE conductores SET estado_operativo=IF(? >= ?, 'disponible','bloqueado_saldo') WHERE id=? AND estado_operativo='en_viaje'",[dinero(saldo-comision),config.operacionesPorServicio,cs[0].id]);
     return {id,estado:'entregado'};
   });
   if(result.e) return error(res,...result.e);

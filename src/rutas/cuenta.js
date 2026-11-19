@@ -21,7 +21,7 @@ async function opcional(cx, sql, params) {
 
 // DELETE /cuenta  (requerido por Google Play: el usuario elimina su cuenta desde la app)
 // Anonimiza los datos personales, borra documentos de identidad, revoca todas las sesiones
-// y desconecta el tiempo real. Los registros de viajes/pedidos/envíos y movimientos de puntos
+// y desconecta el tiempo real. Los registros de viajes/pedidos/envíos y movimientos de operaciones
 // se conservan sin datos personales por obligaciones contables y de seguridad.
 // Cuerpo opcional: { confirmacion: "ELIMINAR" }
 rutaCuenta.delete('/', autenticar, async (req, res) => {

@@ -81,8 +81,9 @@ export const config = {
   osrmBaseUrl: (process.env.OSRM_BASE_URL ?? 'https://router.project-osrm.org').trim().replace(/\/$/, ''),
   // Número de WhatsApp del administrador que recibe las solicitudes de activación (solo dígitos, sin + ni espacios).
   whatsappBusinessNumber: String(process.env.WHATSAPP_BUSINESS_NUMBER ?? '').replace(/\D/g, ''),
-  // Puntos fijos que se descuentan por cada viaje, pedido o envío completado (no es porcentaje ni dinero).
-  puntosPorViaje: Number(process.env.PUNTOS_POR_VIAJE ?? 2),
+  // Una operación se descuenta por cada viaje, envío/delivery o venta completada.
+  // Es un valor fijo del modelo comercial: no se controla desde variables antiguas de PTS.
+  operacionesPorServicio: 1,
   envPath,
   envFileLoaded,
   // Versión vigente de los Términos y la Política de Privacidad (se guarda al aceptar)
@@ -134,7 +135,7 @@ export function erroresConfiguracionProduccion(c = config) {
   if (!c.db.password) errores.push('DB_PASSWORD es obligatorio en producción.');
   if (!c.qrRecargaDeunaUrl || !/^https:\/\//i.test(c.qrRecargaDeunaUrl)) errores.push('QR_RECARGA_DEUNA_URL debe ser HTTPS y apuntar a la imagen del QR oficial o a una página compartida de imgbb.');
   if (!/^\d{8,15}$/.test(c.whatsappBusinessNumber)) errores.push('WHATSAPP_BUSINESS_NUMBER debe ser el número del administrador con código de país, solo dígitos (ej: 591XXXXXXXX).');
-  if (!Number.isFinite(c.puntosPorViaje) || c.puntosPorViaje <= 0) errores.push('PUNTOS_POR_VIAJE debe ser un número mayor que 0.');
+  if (c.operacionesPorServicio !== 1) errores.push('El modelo actual requiere exactamente 1 operación por servicio completado.');
   if (!Number.isInteger(c.puerto) || c.puerto < 1 || c.puerto > 65535) errores.push('PORT no es un puerto válido.');
   return errores;
 }

@@ -121,7 +121,7 @@ async function obtenerDetalle(cx, viajeId) {
     ...fila,
     tarifa_estimada: enteroBs(fila.tarifa_estimada),
     tarifa_final: fila.tarifa_final == null ? null : enteroBs(fila.tarifa_final),
-    comision_monto: fila.comision_monto == null ? null : enteroBs(fila.comision_monto),
+    operaciones_requeridas: fila.comision_monto == null ? null : Math.floor(Number(fila.comision_monto)),
     ganancia_conductor: fila.ganancia_conductor == null ? null : enteroBs(fila.ganancia_conductor),
   };
 }
@@ -203,9 +203,9 @@ rutaViajes.post('/cotizar', autenticar, async (req, res) => {
   }
   const tarifa = enteroBs(calculo.tarifa_bs);
   const comisionPorcentaje = Math.max(0, Math.min(100, await ajusteNumero('comision_porcentaje', 10)));
-  // Sistema de puntos: la comisión De Volada es un descuento fijo de puntos por servicio completado.
+  // Sistema de operaciones: la comisión De Volada es un descuento fijo de operaciones por servicio completado.
   // comision_porcentaje se conserva solo como dato histórico en la BD.
-  const comision = config.puntosPorViaje;
+  const comision = config.operacionesPorServicio;
   const validezSegundos = Math.max(15, Math.min(600, Math.floor(await ajusteNumero('validez_cotizacion_s', 120))));
   const ahora = Math.floor(Date.now() / 1000);
   const tokenDatos = {
@@ -237,8 +237,8 @@ rutaViajes.post('/cotizar', autenticar, async (req, res) => {
     duracion_estimada_s: ruta.duracion_estimada_s,
     duracion_estimada_min: Math.max(1, Math.round(ruta.duracion_estimada_s / 60)),
     tarifa_estimada_bs: tarifa,
-    comision_estimada_bs: comision,
-    comision_puntos: comision,
+    operaciones_requeridas: comision,
+    operaciones_por_servicio: comision,
     comision_porcentaje: comisionPorcentaje,
     detalle_tarifa: calculo.detalle,
     moneda: 'BOB',
@@ -379,7 +379,7 @@ rutaViajes.post('/disponibilidad', autenticar, async (req, res) => {
   }
   if (c.estado_aprobacion !== 'aprobado') return error(res, 403, 'CONDUCTOR_NO_APROBADO', 'La cuenta aún no está aprobada.');
   if (!c.moto_id) return error(res, 409, 'SIN_VEHICULO', 'Registra una moto o auto antes de conectarte.');
-  if (!c.billetera_id || c.billetera_estado !== 'activa') return error(res, 409, 'BILLETERA_NO_ACTIVA', 'Tu billetera no está activa.');
+  if (!c.billetera_id || c.billetera_estado !== 'activa') return error(res, 409, 'OPERACIONES_NO_ACTIVADAS', 'Tu cuenta de operaciones no está activa.');
   const [licencias] = await db.execute(
     `SELECT (licencia_vence_en IS NOT NULL AND licencia_vence_en >= DATE(UTC_TIMESTAMP() - INTERVAL 4 HOUR)) AS vigente
        FROM conductores WHERE id=?`, [c.conductor_id]);
@@ -390,9 +390,9 @@ rutaViajes.post('/disponibilidad', autenticar, async (req, res) => {
   const presentes = new Set(docs.map((d) => d.tipo));
   const faltan = tiposDocumentoVehiculo(c.tipo_vehiculo).filter((t) => !presentes.has(t));
   if (faltan.length) return error(res, 403, 'DOCUMENTOS_NO_VIGENTES', 'Hay documentos requeridos no aprobados o vencidos.', { faltan });
-  const puntosMinimos = config.puntosPorViaje;
+  const operacionesMinimas = config.operacionesPorServicio;
   const saldoLibre = redondear(Math.max(0, Number(c.saldo_prepago ?? 0) - Number(c.saldo_comision_reservado ?? 0)));
-  if (saldoLibre < puntosMinimos) return error(res, 409, 'SALDO_INSUFICIENTE', `Necesitas al menos ${puntosMinimos} puntos disponibles para conectarte. Recarga puntos para recibir servicios.`, { puntos_disponibles: saldoLibre, puntos_requeridos: puntosMinimos });
+  if (saldoLibre < operacionesMinimas) return error(res, 409, 'SALDO_INSUFICIENTE', `Necesitas al menos ${operacionesMinimas} operaciones disponibles para conectarte. Recarga operaciones para recibir servicios.`, { operaciones_disponibles: saldoLibre, operaciones_requeridas: operacionesMinimas });
   const ubicacion = await ubicacionConductor(db, c.conductor_id, await ajusteNumero('ubicacion_max_antiguedad_s', 30));
   if (!ubicacion) return error(res, 409, 'UBICACION_NO_ACTUALIZADA', 'Actualiza tu ubicación GPS antes de conectarte.');
   await db.execute("UPDATE conductores SET estado_operativo='disponible' WHERE id=?", [c.conductor_id]);
@@ -409,10 +409,10 @@ rutaViajes.get('/ofertas', autenticar, async (req, res) => {
   const edad = await ajusteNumero('ubicacion_max_antiguedad_s', 30);
   const u = await ubicacionConductor(db, c.conductor_id, edad);
   if (!u) return error(res, 409, 'UBICACION_NO_ACTUALIZADA', 'Actualiza tu ubicación GPS para ver solicitudes.');
-  const puntosMinimos = config.puntosPorViaje;
+  const operacionesMinimas = config.operacionesPorServicio;
   const saldoLibre = redondear(Math.max(0, Number(c.saldo_prepago ?? 0) - Number(c.saldo_comision_reservado ?? 0)));
-  if (saldoLibre < puntosMinimos) {
-    return error(res, 409, 'SALDO_COMISION_INSUFICIENTE', `No tienes puntos suficientes. Cada servicio completado descuenta ${puntosMinimos} puntos; recarga para volver a recibir viajes y delivery.`, { saldo_comision_bs: Number(c.saldo_prepago ?? 0), reservado_bs: Number(c.saldo_comision_reservado ?? 0), disponible_bs: saldoLibre, minimo_bs: puntosMinimos, puntos_disponibles: saldoLibre, puntos_requeridos: puntosMinimos });
+  if (saldoLibre < operacionesMinimas) {
+    return error(res, 409, 'SALDO_COMISION_INSUFICIENTE', `No tienes operaciones suficientes. Cada servicio completado consume ${operacionesMinimas} operación; recarga para volver a recibir viajes y delivery.`, { operaciones_total: Number(c.saldo_prepago ?? 0), operaciones_reservadas: Number(c.saldo_comision_reservado ?? 0), operaciones_disponibles: saldoLibre, operaciones_requeridas: operacionesMinimas });
   }
   const radio = Math.max(1, Math.min(20, await ajusteNumero('radio_busqueda_km', 3)));
   const [filas] = await db.execute(
@@ -502,7 +502,7 @@ rutaViajes.post('/:id/aceptar', autenticar, async (req, res) => {
       if (c.estado_operativo !== 'disponible') return { e: [409, 'CONDUCTOR_NO_DISPONIBLE', 'Debes estar disponible para aceptar un viaje.'] };
       if (!c.moto_id) return { e: [409, 'SIN_VEHICULO', 'Tu cuenta no tiene un vehículo registrado.'] };
       if (v.tipo_vehiculo_solicitado && c.tipo_vehiculo !== v.tipo_vehiculo_solicitado) return { e: [409, 'VEHICULO_NO_COINCIDE', `Este viaje fue cotizado para ${v.tipo_vehiculo_solicitado}. Solo un conductor con ese tipo de vehículo puede aceptarlo.`] };
-      if (!c.billetera_id || c.billetera_estado !== 'activa') return { e: [409, 'BILLETERA_NO_ACTIVA', 'Tu billetera de conductor no está activa.'] };
+      if (!c.billetera_id || c.billetera_estado !== 'activa') return { e: [409, 'OPERACIONES_NO_ACTIVADAS', 'Tu cuenta de operaciones no está activa.'] };
       if (c.restringido_hasta && new Date(c.restringido_hasta).getTime() > Date.now()) return { e: [403, 'CUENTA_RESTRINGIDA', 'Tu cuenta tiene una restricción temporal.'] };
       const [docRows] = await cx.execute(
         `SELECT DISTINCT tipo FROM documentos_conductor
@@ -526,10 +526,10 @@ rutaViajes.post('/:id/aceptar', autenticar, async (req, res) => {
       const separacion = haversineMetros(Number(ubi.latitud), Number(ubi.longitud), Number(v.origen_lat), Number(v.origen_lng));
       if (separacion > radioKm * 1000) return { e: [409, 'FUERA_DEL_RADIO', `Debes estar a menos de ${radioKm} km del punto de recogida.`, { distancia_m: Math.round(separacion), radio_km: radioKm }] };
 
-      // Sistema de puntos: se reservan exactamente config.puntosPorViaje puntos (no un porcentaje).
-      const comisionRequerida = config.puntosPorViaje;
+      // Sistema de operaciones: se reservan exactamente config.operacionesPorServicio operación (no un porcentaje).
+      const comisionRequerida = config.operacionesPorServicio;
       const saldoLibreConductor = redondear(Math.max(0, Number(c.saldo_prepago) - Number(c.saldo_comision_reservado ?? 0)));
-      if (saldoLibreConductor < comisionRequerida) return { e: [409, 'SALDO_INSUFICIENTE', `No tienes puntos suficientes para aceptar este viaje. Necesitas ${comisionRequerida} puntos disponibles; recarga puntos para seguir recibiendo servicios.`, { saldo_bs: Number(c.saldo_prepago), reservado_bs: Number(c.saldo_comision_reservado ?? 0), disponible_bs: saldoLibreConductor, requerido_bs: comisionRequerida, comision_bs: comisionRequerida, puntos_disponibles: saldoLibreConductor, puntos_requeridos: comisionRequerida }] };
+      if (saldoLibreConductor < comisionRequerida) return { e: [409, 'SALDO_INSUFICIENTE', `No tienes operaciones suficientes para aceptar este viaje. Necesitas ${comisionRequerida} operaciones disponibles; recarga operaciones para seguir recibiendo servicios.`, { operaciones_total: Number(c.saldo_prepago), operaciones_reservadas: Number(c.saldo_comision_reservado ?? 0), operaciones_disponibles: saldoLibreConductor, operaciones_requeridas: comisionRequerida }] };
 
       const [serviciosActivos] = await cx.execute(
         `SELECT id FROM pedidos WHERE conductor_id=? AND estado IN ('asignado','recogido','en_camino','requiere_revision') LIMIT 1 FOR UPDATE`, [c.conductor_id],
@@ -541,7 +541,7 @@ rutaViajes.post('/:id/aceptar', autenticar, async (req, res) => {
       await cx.execute(
         `UPDATE viajes SET estado='aceptado', conductor_id=?, moto_id=?, aceptado_en=UTC_TIMESTAMP(), comision_reservada=?, comision_monto=?
           WHERE id=? AND estado='solicitado'`,
-        // comision_monto guarda los puntos reservados para liberar exactamente lo mismo al finalizar o cancelar.
+        // comision_monto guarda las operaciones reservadas para liberar exactamente lo mismo al finalizar o cancelar.
         [c.conductor_id, c.moto_id, comisionRequerida > 0 ? 1 : 0, comisionRequerida, viajeId],
       );
       await cx.execute("UPDATE conductores SET estado_operativo='en_viaje' WHERE id=?", [c.conductor_id]);
@@ -671,11 +671,11 @@ rutaViajes.post('/:id/finalizar', autenticar, async (req, res) => {
     const metros = haversineMetros(Number(ubi.latitud), Number(ubi.longitud), Number(v.destino_lat), Number(v.destino_lng));
     if (metros > tolerancia) return { e: [409, 'DEMASIADO_LEJOS', `Debes estar a ${tolerancia} m o menos del destino para finalizar.`, { distancia_m: Math.round(metros), tolerancia_m: tolerancia }] };
     const tarifaFinal = enteroBs(Number(v.tarifa_estimada));
-    // Sistema de puntos: siempre se descuentan config.puntosPorViaje puntos por viaje completado.
-    // La tarifa la cobra el conductor íntegra; los puntos no son dinero.
-    const comisionFinal = config.puntosPorViaje;
+    // Sistema de operaciones: siempre se descuentan config.operacionesPorServicio operaciones por viaje completado.
+    // La tarifa la cobra el conductor íntegra; las operaciones no son dinero.
+    const comisionFinal = config.operacionesPorServicio;
     const gananciaFinal = tarifaFinal;
-    // Reserva a liberar: los puntos guardados al aceptar; viajes antiguos usan su cálculo porcentual original.
+    // Reserva a liberar: las operaciones reservadas al aceptar; viajes antiguos usan su cálculo porcentual original.
     const montoReservado = v.comision_monto != null
       ? Number(v.comision_monto)
       : enteroBs(Number(v.tarifa_estimada) * Number(v.comision_porcentaje) / 100);
@@ -684,14 +684,14 @@ rutaViajes.post('/:id/finalizar', autenticar, async (req, res) => {
       [c.conductor_id],
     );
     const billeteraConductor = wallets[0];
-    if (!billeteraConductor) return { e: [409, 'BILLETERA_NO_CREADA', 'No se encontró el saldo de comisiones del conductor.'] };
+    if (!billeteraConductor) return { e: [409, 'OPERACIONES_NO_ACTIVADAS', 'No se encontró la cuenta de operaciones del conductor.'] };
     const comisionAntes = Number(billeteraConductor.saldo_prepago);
     const reservaActiva = Number(v.comision_reservada ?? 0) === 1;
     const reservaWallet = Number(billeteraConductor.saldo_comision_reservado ?? 0);
     const libreParaEsteViaje = reservaActiva ? comisionAntes : redondear(Math.max(0, comisionAntes - reservaWallet));
     const reservasInconsistentes = reservaActiva && comisionAntes < reservaWallet;
     if (comisionFinal > 0 && (libreParaEsteViaje < comisionFinal || (reservaActiva && reservaWallet < montoReservado) || reservasInconsistentes)) {
-      const motivo = `Saldo/reserva insuficiente al finalizar el viaje #${id}; requiere conciliación administrativa.`;
+      const motivo = `Operaciones/reserva insuficientes al finalizar el viaje #${id}; requiere conciliación administrativa.`;
       await cx.execute("UPDATE viajes SET estado='requiere_revision',motivo_revision=?,comision_reservada=0 WHERE id=?", [motivo.slice(0,255), id]);
       await cx.execute("UPDATE conductores SET estado_operativo='bloqueado_saldo' WHERE id=?", [c.conductor_id]);
       return { revisionPendiente: true, viaje_id: id, motivo, mensaje: 'El viaje se guardó para revisión administrativa. No se descontó una comisión parcial.' };
@@ -708,7 +708,7 @@ rutaViajes.post('/:id/finalizar', autenticar, async (req, res) => {
         `INSERT INTO movimientos_billetera
            (billetera_id, cuenta, tipo, monto, saldo_antes, saldo_despues, viaje_id, descripcion, idempotency_key)
          VALUES (?, 'prepago', 'comision', ?, ?, ?, ?, ?, ?)`,
-        [billeteraConductor.id, -comisionFinal, comisionAntes, comisionDespues, id, `Comisión viaje #${id}: -${config.puntosPorViaje} pts`, `comision:viaje:${id}`],
+        [billeteraConductor.id, -comisionFinal, comisionAntes, comisionDespues, id, `Comisión viaje #${id}: -${config.operacionesPorServicio} operaciones`, `comision:viaje:${id}`],
       );
     }
     await cx.execute(
@@ -717,15 +717,15 @@ rutaViajes.post('/:id/finalizar', autenticar, async (req, res) => {
         WHERE id=?`,
       [tarifaFinal, comisionFinal, gananciaFinal, id],
     );
-    // Si ya no le alcanzan los puntos para otro servicio, queda bloqueado hasta recargar.
-    const saldoMinimoOperativo = config.puntosPorViaje;
+    // Si ya no le alcanzan los operaciones para otro servicio, queda bloqueado hasta recargar.
+    const saldoMinimoOperativo = config.operacionesPorServicio;
     await cx.execute(
       `UPDATE conductores
           SET estado_operativo = ?, total_viajes = total_viajes + 1
         WHERE id = ?`,
       [comisionDespues < saldoMinimoOperativo ? 'bloqueado_saldo' : 'disponible', c.conductor_id],
     );
-    return { viaje: await obtenerDetalle(cx, id), nota: `Cobro marcado como ${v.metodo_pago === 'digital' ? 'QR directo al conductor' : 'efectivo'}; se descontaron ${comisionFinal} puntos De Volada.`, puntos_descontados: comisionFinal, puntos_restantes: comisionDespues };
+    return { viaje: await obtenerDetalle(cx, id), nota: `Cobro marcado como ${v.metodo_pago === 'digital' ? 'QR directo al conductor' : 'efectivo'}; se descontaron ${comisionFinal} operaciones De Volada.`, operaciones_descontadas: comisionFinal, operaciones_restantes: comisionDespues };
   });
   if (responderErrorDeOperacion(res, r)) return;
   notificarEstadoViaje(id); // Etapa 9
@@ -756,42 +756,19 @@ rutaViajes.post('/:id/cancelar', autenticar, async (req, res) => {
     else if (esConductor && ['aceptado', 'conductor_llego'].includes(v.estado)) nuevoEstado = 'cancelado_conductor';
     else return { e: [409, 'CANCELACION_NO_PERMITIDA', 'El estado actual del viaje no permite cancelarlo.'] };
 
-    // comision_monto se limpia: un viaje cancelado no genera descuento de puntos.
+    // comision_monto se limpia: un viaje cancelado no genera descuento de operaciones.
     await cx.execute('UPDATE viajes SET estado=?, motivo_cancelacion=?, cancelado_en=UTC_TIMESTAMP(), comision_reservada=0, comision_monto=NULL WHERE id=?', [nuevoEstado, motivo, id]);
     if (v.conductor_id != null && Number(v.comision_reservada ?? 0) === 1) {
-      const comisionReservada = v.comision_monto != null
-        ? Number(v.comision_monto)
-        : enteroBs(Number(v.tarifa_estimada) * Number(v.comision_porcentaje) / 100);
+      const comisionReservada = v.comision_monto != null ? Number(v.comision_monto) : config.operacionesPorServicio;
       const [bsRes] = await cx.execute('SELECT id,saldo_prepago,saldo_comision_reservado FROM billeteras WHERE conductor_id=? LIMIT 1 FOR UPDATE', [v.conductor_id]);
       if (bsRes[0]) {
         await cx.execute('UPDATE billeteras SET saldo_comision_reservado=GREATEST(0,saldo_comision_reservado-?) WHERE id=?', [comisionReservada, bsRes[0].id]);
-        const minimo = config.puntosPorViaje;
+        const minimo = config.operacionesPorServicio;
         const libre = redondear(Number(bsRes[0].saldo_prepago) - Math.max(0, Number(bsRes[0].saldo_comision_reservado) - comisionReservada));
         await cx.execute('UPDATE conductores SET estado_operativo=? WHERE id=?', [libre >= minimo ? 'disponible' : 'bloqueado_saldo', v.conductor_id]);
       }
     }
 
-    // Compatibilidad de una sola vez: devuelve saldo únicamente a viajes antiguos que sí
-    // registraron un débito de billetera del pasajero antes de adoptar el QR directo.
-    if (v.metodo_pago === 'digital') {
-      const [bs] = await cx.execute('SELECT id, saldo FROM billeteras_pasajero WHERE usuario_id=? LIMIT 1 FOR UPDATE', [v.pasajero_id]);
-      const bPasajero = bs[0];
-      if (bPasajero) {
-        const [debito] = await cx.execute('SELECT monto FROM movimientos_billetera_pasajero WHERE billetera_id=? AND idempotency_key=? LIMIT 1', [bPasajero.id, `pago:viaje:${id}`]);
-        const [devolucion] = await cx.execute('SELECT id FROM movimientos_billetera_pasajero WHERE billetera_id=? AND idempotency_key=? LIMIT 1', [bPasajero.id, `reembolso:viaje:${id}`]);
-        if (debito[0] && !devolucion[0]) {
-          const importe = redondear(Math.abs(Number(debito[0].monto)));
-          const antes = Number(bPasajero.saldo);
-          const despues = redondear(antes + importe);
-          await cx.execute('UPDATE billeteras_pasajero SET saldo=? WHERE id=?', [despues, bPasajero.id]);
-          await cx.execute(
-            `INSERT INTO movimientos_billetera_pasajero (billetera_id, tipo, monto, saldo_antes, saldo_despues, viaje_id, descripcion, idempotency_key)
-             VALUES (?, 'reembolso', ?, ?, ?, ?, ?, ?)`,
-            [bPasajero.id, importe, antes, despues, id, `Devolución heredada por cancelación del viaje #${id}`, `reembolso:viaje:${id}`],
-          );
-        }
-      }
-    }
     if (v.conductor_id != null) {
       await cx.execute("UPDATE conductores SET estado_operativo='disponible' WHERE id=? AND estado_operativo='en_viaje'", [v.conductor_id]);
     }

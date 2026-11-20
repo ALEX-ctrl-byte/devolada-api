@@ -96,3 +96,47 @@ test('Stadia reverse geocoding y validación de consulta corta', async (t) => {
     (e) => e.codigo === 'CONSULTA_INVALIDA' && e.estadoHttp === 422,
   );
 });
+
+const { normalizarConsulta, planDeBusqueda, ciudadCercana } = await import('../src/servicios/geocodificacionStadia.js');
+
+test('Geocodificación: expande abreviaturas y corrige errores comunes', () => {
+  assert.equal(normalizarConsulta('av. Mariscal Snta cruz'), 'avenida Mariscal santa cruz');
+  assert.equal(normalizarConsulta('Av Arce esq. Plaza Isabel la Católica'), 'avenida Arce esquina Plaza Isabel la Católica');
+  assert.equal(normalizarConsulta('c/ Comercio 123 '), 'calle Comercio 123');
+  assert.equal(normalizarConsulta('Pje. Sta Ana'), 'pasaje santa Ana');
+  assert.equal(normalizarConsulta('Avenida Camacho'), 'Avenida Camacho'); // no toca "Avenida" ni "Camacho"
+});
+
+test('Geocodificación: la ciudad cercana desambigua "Mariscal Santa Cruz"', () => {
+  assert.equal(ciudadCercana(-16.5, -68.13), 'La Paz');
+  assert.equal(ciudadCercana(-16.51, -68.17), 'El Alto');
+  assert.equal(ciudadCercana(0, 0), null);
+  const plan = planDeBusqueda('av. Mariscal Santa Cruz', -16.495, -68.133);
+  assert.deepEqual(plan[0], { modo: 'autocomplete', texto: 'avenida Mariscal Santa Cruz' });
+  assert.ok(plan.some((p) => p.modo === 'autocomplete' && p.texto === 'avenida Mariscal Santa Cruz, La Paz'));
+  assert.ok(plan.some((p) => p.modo === 'search'));
+});
+
+test('Geocodificación: si el autocompletado no encuentra, reintenta con la ciudad y devuelve resultados', async (t) => {
+  const originalFetch = globalThis.fetch;
+  t.after(() => { globalThis.fetch = originalFetch; });
+  const llamadas = [];
+  globalThis.fetch = async (url) => {
+    const u = new URL(url);
+    llamadas.push(`${u.pathname.split('/').pop()}:${u.searchParams.get('text')}`);
+    const conCiudad = (u.searchParams.get('text') ?? '').endsWith(', La Paz');
+    return respuestaJson({ features: conCiudad ? [{ properties: { label: 'Avenida Mariscal Santa Cruz, La Paz, Bolivia' }, geometry: { coordinates: [-68.1337, -16.4951] } }] : [] });
+  };
+  const r = await buscarDireccionesStadia('av. Mariscal Snta Cruz', -16.495, -68.133);
+  assert.deepEqual(r, [{ texto: 'Avenida Mariscal Santa Cruz, La Paz, Bolivia', lat: -16.4951, lng: -68.1337 }]);
+  assert.deepEqual(llamadas, ['autocomplete:avenida Mariscal santa Cruz', 'autocomplete:avenida Mariscal santa Cruz, La Paz']);
+});
+
+test('Geocodificación: sin coincidencias en ningún intento devuelve lista vacía; un fallo total sigue siendo error', async (t) => {
+  const originalFetch = globalThis.fetch;
+  t.after(() => { globalThis.fetch = originalFetch; });
+  globalThis.fetch = async () => respuestaJson({ features: [] });
+  assert.deepEqual(await buscarDireccionesStadia('zzzz qqqq', -16.5, -68.13), []);
+  globalThis.fetch = async () => respuestaJson({}, 500);
+  await assert.rejects(buscarDireccionesStadia('zzzz qqqq', -16.5, -68.13), (e) => e.codigo === 'GEOCODIFICACION_NO_DISPONIBLE');
+});
